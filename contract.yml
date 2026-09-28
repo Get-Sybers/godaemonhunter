@@ -1,0 +1,75 @@
+# godaemonhunter/contract.yml — the single source of truth for how DX_DFIR drives this tool.
+tool: godaemonhunter
+image: get-sybers/godaemonhunter:latest
+entrypoint: multi-tool
+description: >
+  The Linux and macOS daemon matrix as one structured binary (docs/linux
+  decisions 15–17): every daemon parser a sub-tool of the layered one-shot
+  that runs Layer 1 (gohost, gousers, gonetwork; on a Mac gomachost and
+  gomacusers emit the same record types from the property lists) first,
+  builds the image's knowledge store, then runs the daemon parsers
+  enriched by it — golaunchd (launchd jobs and overrides) feeds the
+  service stream beside gounit, and gosyslog, gowtmp, gocron, goshell and
+  gousers read the macOS shapes of their artefacts (system/install/wifi
+  logs, utmpx, at tabs and periodic scripts, per-session histories,
+  master.passwd). The parameter is the STREAM — a byakugan model word
+  scoping the run to the parsers that feed that model; no arguments is
+  every stream, the default. One binary, one run, one structured output
+  tree, one JSON summary line.
+
+# The calling vocabulary (decision 17): every accepted stream word IS a
+# byakugan model (model/car/objects at the BYAKUGAN_REF pin). Bare
+# invocation (or `hunt`) is every stream; stream words scope the Layer-2
+# daemon parsers; Layer 1 is never scoped — it is the knowledge store.
+# Model words nothing here feeds yet (registry, thread, …) are rejected.
+streams: [authentication, user_session, process, service, flow, file, module]
+
+subtools: [hunt, gohost, gousers, gonetwork, gomachost, gomacusers, gojournal, goauditd, gowtmp, gosyslog, gounit, gocron, goshell, gotrash, goctl, golaunchd]
+
+# The layers, for a driver that runs the parsers one container at a time
+# over a staged host tree (DX_DFIR's loose-host path): layer1 builds the
+# knowledge store and runs first, layer2 runs with it mounted. This is the
+# registry hunt runs — a driver reads it from here rather than carrying a
+# copy; the binary's tests hold the two in step.
+layer1: [gohost, gousers, gonetwork, gomachost, gomacusers]
+layer2: [gojournal, goauditd, gowtmp, gosyslog, gounit, gocron, goshell, gotrash, goctl, golaunchd]
+
+# hunt's own block. A parser sub-tool run (`godaemonhunter gowtmp`) reads
+# that tool's canonical <SUBTOOL>_* block instead (GOWTMP_INPUT_DIR,
+# GOWTMP_OUT_DIR, …) — each parser package's README (wtmp/README.md and
+# siblings) documents its block and its record shapes.
+env:
+  GODAEMONHUNTER_INPUT_DIR:     {required: false, default: /input,  desc: 'evidence tree, recursed read-only, shared by every sub-run'}
+  GODAEMONHUNTER_OUT_DIR:       {required: false, default: /output, desc: 'output root: knowledge/ (Layer 1) + one <subtool>/ tree per daemon parser'}
+  GODAEMONHUNTER_KNOWLEDGE_DIR: {required: false, default: "",      desc: 'override the knowledge store location; empty = <OUT_DIR>/knowledge, built by Layer 1 in the same run'}
+  GODAEMONHUNTER_WORK_DIR:      {required: false, default: /work,   desc: 'scratch (writable tmpfs), shared by every sub-run; a disk image''s linux-core / macos-core surface is pulled here while its parsers run, so bind a disk-backed dir for large images'}
+  GODAEMONHUNTER_IMAGE:         {required: false, default: "",      desc: 'run ON one disk image: its path relative to INPUT_DIR (E01/Ex01, raw, VMDK, VHDX, VHD, QCOW2, VDI, DMG (.dmg), sparseimage (.sparseimage)). The baked-in gomount pulls the linux-core and macos-core surfaces (docs/linux §5.4; whichever the OS volume holds — a Mac''s APFS Data volume or HFS+ volume resolves like a Linux root) into WORK_DIR, the layered run goes over that as over a staged root tree, the knowledge store lands at <KNOWLEDGE_DIR>/<image>/ and the records under <OUT_DIR>/<subtool>/<image>/, nothing is exported. Empty = the loose tree itself plus every image directly under it; a sub-tool run reads <SUBTOOL>_IMAGE and writes <OUT_DIR>/<image>/'}
+  GODAEMONHUNTER_FORCE:         {required: false, default: "0", type: bool, desc: '1/true/yes/on reruns items that already have valid output, in every sub-run'}
+  GODAEMONHUNTER_LOG_LEVEL:     {required: false, default: info,    desc: 'error|warn|info|debug, stderr only, applied to every sub-run'}
+
+mounts:
+  - {name: input,     path: /input,     mode: ro, env: GODAEMONHUNTER_INPUT_DIR, required: true}
+  - {name: output,    path: /output,    mode: rw, env: GODAEMONHUNTER_OUT_DIR,   required: true}
+  - {name: knowledge, path: /knowledge, mode: rw, env: GODAEMONHUNTER_KNOWLEDGE_DIR, required: false}
+  - {name: work,      path: /work,      mode: rw, env: GODAEMONHUNTER_WORK_DIR,  required: false}
+
+network: none
+exit_codes: {0: success, 1: nothing_produced, 2: config_error, 3: partial}
+
+summary_schema:
+  required: [tool, version, pinfo, status, inputs, processed, skipped, failed, records, knowledge_dir, streams, subtools, exit, started, duration_s]
+  note: >
+    the layered run prints ONE aggregate line with the stream words it ran
+    under `streams` and every sub-tool's own summary embedded under
+    `subtools`; a single-parser sub-run prints that parser's ordinary
+    summary line.
+
+outputs:
+  hunt: "<OUT_DIR>/knowledge/<item>/{gohost,gousers,gonetwork,gomachost,gomacusers}.jsonl (Layer 1, also the store the rest consume) + <OUT_DIR>/<subtool>/<item>/<subtool>.jsonl per daemon parser, records enriched per docs/linux decision 14"
+  subtool: "as that parser's package README declares (one folder per item under its OUT_DIR)"
+
+argv_passthrough: >
+  `godaemonhunter <subtool>` runs that parser's env-driven batch mode under
+  its canonical <SUBTOOL>_* block. `godaemonhunter <subtool> <args>` is the
+  parser's argv debug pass-through (-f FILE | -d DIR | --tar, -q); there
+  are no standalone per-parser binaries.
