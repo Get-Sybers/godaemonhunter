@@ -1,7 +1,7 @@
 # `get-sybers/godaemonhunter` — the Linux matrix as one structured binary
 
-Every daemon parser of the Linux matrix ([docs/linux](../docs/linux/README.md),
-decisions 15–17) is a package of this module and a sub-tool of this single
+Every daemon parser of the Linux matrix (the Linux design, decisions
+15–17) is a package of this module and a sub-tool of this single
 static binary, run through the layered one-shot:
 
 1. **Layer 1** runs first — `gohost`, `gousers`, `gonetwork` — and their
@@ -15,9 +15,9 @@ static binary, run through the layered one-shot:
    in the image's own zone. Correlation and joining stay byakugan's job.
 
 One binary, one run, one structured output tree, one JSON summary line.
-This is the multi-tool dispatcher shape of
-[docs/framework/04 §4.3](../docs/framework/04-self-orchestration.md)
-(the plaso and signatures precedent) — and per decision 16 it is the
+This is the multi-tool self-orchestration shape defined by the get-sybers
+framework standard (the plaso and signatures precedent) — and per decision 16
+it is the
 **only** shipped shape: the parsers live here as packages, and there are
 no standalone per-parser binaries or images. godaemonhunter *is* the
 Linux tool.
