@@ -56,14 +56,12 @@ onto every record as `Origin`/`Snapshot`/`Residue`.
 ## Run
 
 ```sh
-docker build -t get-sybers/godaemonhunter:latest -f godaemonhunter/Dockerfile .
-docker run --rm --cap-drop ALL --security-opt no-new-privileges --network none \
-  --read-only --tmpfs /work:rw,nosuid,nodev,uid=2000,gid=2000 \
-  -v "$PWD/in:/input:ro" -v "$PWD/out:/output" \
-  get-sybers/godaemonhunter:latest gotrash
-```
+go install github.com/get-sybers/godaemonhunter@latest   # -> $(go env GOPATH)/bin/godaemonhunter
 
-(Build from the **repo root**: the image copies the sibling `pinfo/` module.)
+# env-driven — set the variables from the Env table above (point the
+# *_DIR paths at local directories), then run the sub-tool:
+GOTRASH_INPUT_DIR=./in GOTRASH_OUT_DIR=./out godaemonhunter gotrash
+```
 
 ## argv pass-through (debug only, `godaemonhunter gotrash <args>`)
 

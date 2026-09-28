@@ -155,21 +155,24 @@ else 1.
 ## Run
 
 ```sh
-docker build -t get-sybers/godaemonhunter:latest -f godaemonhunter/Dockerfile .
-docker run --rm --cap-drop ALL --security-opt no-new-privileges --network none \
-  --read-only --tmpfs /work:rw,nosuid,nodev,uid=2000,gid=2000 \
-  -v "$PWD/in:/input:ro" -v "$PWD/out:/output" \
-  get-sybers/godaemonhunter:latest              # every stream (the default)
+go install github.com/get-sybers/godaemonhunter@latest   # -> $(go env GOPATH)/bin/godaemonhunter
+
+# every stream (the default layered run), env-driven — see Env (the layered
+# run) above; point the *_DIR paths at local directories:
+GODAEMONHUNTER_INPUT_DIR=./in GODAEMONHUNTER_OUT_DIR=./out godaemonhunter
 ```
 
-Scoped, the stream is the only thing that changes:
+Or scope to a single sub-tool's env-driven batch — each reads its own
+`<SUBTOOL>_*` block (see the per-parser READMEs):
 
 ```sh
-docker run --rm … get-sybers/godaemonhunter:latest authentication
+GOCRON_INPUT_DIR=./in GOCRON_OUT_DIR=./out godaemonhunter gocron
 ```
 
-(Build from the **repo root**: the image copies the sibling `pinfo/`
-module; the parser packages already live in this directory.)
+The shared runtime is imported from the published
+[`github.com/get-sybers/gopinfo`](https://github.com/Get-Sybers/gopinfo) module,
+not vendored here. Container images are built and documented separately in
+[GoDFIR-toolz](https://github.com/Get-Sybers/GoDFIR-toolz).
 
 ## argv pass-through (debug only)
 

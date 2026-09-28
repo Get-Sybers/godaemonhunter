@@ -81,6 +81,16 @@ is `launchd_job` or `launchd_override`.
 | 2 | config error — bad variable, missing input, unwritable output |
 | 3 | partial — at least one item failed (a plist that is not a job) |
 
+## Run
+
+```sh
+go install github.com/get-sybers/godaemonhunter@latest   # -> $(go env GOPATH)/bin/godaemonhunter
+
+# env-driven — set the variables from the Env table above (point the
+# *_DIR paths at local directories), then run the sub-tool:
+GOLAUNCHD_INPUT_DIR=./in GOLAUNCHD_OUT_DIR=./out godaemonhunter golaunchd
+```
+
 ## argv pass-through (debug only)
 
 ```

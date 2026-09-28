@@ -74,15 +74,12 @@ file; one `journal_entry` record per entry.
 ## Run
 
 ```sh
-docker build -t get-sybers/godaemonhunter:latest -f godaemonhunter/Dockerfile .
-docker run --rm --cap-drop ALL --security-opt no-new-privileges --network none \
-  --read-only --tmpfs /work:rw,nosuid,nodev,uid=2000,gid=2000 \
-  -v "$PWD/in:/input:ro" -v "$PWD/out:/output" \
-  get-sybers/godaemonhunter:latest gojournal
-```
+go install github.com/get-sybers/godaemonhunter@latest   # -> $(go env GOPATH)/bin/godaemonhunter
 
-(Build from the **repo root**: the image copies the sibling `pinfo/`
-module; the pinned pure-Go decompressors ride `go.mod`/`go.sum`.)
+# env-driven — set the variables from the Env table above (point the
+# *_DIR paths at local directories), then run the sub-tool:
+GOJOURNAL_INPUT_DIR=./in GOJOURNAL_OUT_DIR=./out godaemonhunter gojournal
+```
 
 ## argv pass-through (debug only, `godaemonhunter gojournal <args>`)
 

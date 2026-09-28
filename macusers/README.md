@@ -68,6 +68,16 @@ is `account` or `group`.
 | 2 | config error — bad variable, missing input, unwritable output |
 | 3 | partial — at least one item failed |
 
+## Run
+
+```sh
+go install github.com/get-sybers/godaemonhunter@latest   # -> $(go env GOPATH)/bin/godaemonhunter
+
+# env-driven — set the variables from the Env table above (point the
+# *_DIR paths at local directories), then run the sub-tool:
+GOMACUSERS_INPUT_DIR=./in GOMACUSERS_OUT_DIR=./out godaemonhunter gomacusers
+```
+
 ## argv pass-through (debug only)
 
 ```
