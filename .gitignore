@@ -1,0 +1,33 @@
+# Build output — `go build .` emits a binary named after the module directory.
+/godaemonhunter
+
+# Go test, coverage, and profiling artifacts
+*.test
+*.out
+coverage.*
+*.prof
+
+# Go build/test cache when localized into the tree. The default GOCACHE lives
+# under ~/.cache/go-build (outside the repo); this catches a repo-local GOCACHE
+# or tool caches. Matches only directories literally named ".cache".
+.cache/
+
+# Python bytecode cache (fixture generators, if any are added).
+__pycache__/
+*.pyc
+
+# Local-only Go workspace: a per-developer convenience for editing several
+# sibling repos at once, never committed. Builds resolve
+# github.com/Get-Sybers/gopinfo as a normal pinned require from the module
+# proxy — there is no replace directive.
+go.work
+go.work.sum
+
+# Editor / OS cruft
+.DS_Store
+*~
+.idea/
+.vscode/
+
+# Go module cache
+/.go/
