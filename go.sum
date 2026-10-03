@@ -1,5 +1,5 @@
-github.com/Get-Sybers/gopinfo v0.2.0 h1:pGq5L3KRndCZwmzfNQ3+fR0A+mctNRmmcWTw5gqY7Ho=
-github.com/Get-Sybers/gopinfo v0.2.0/go.mod h1:zl3HyzkoEBmlXTBKU+pdRaFcCE/Yx5XlUTLAwn4jJ7s=
+github.com/Get-Sybers/gopinfo v0.2.1 h1:w2NK63gCFwo7E9Tvb08rrDgBc/tNsdwpuCNgj2nrzDw=
+github.com/Get-Sybers/gopinfo v0.2.1/go.mod h1:1leLLwERhLtHqC8wuzHDdUiw+oafddhP/oq3blTfQmI=
 github.com/klauspost/compress v1.20.1 h1:T7kKElXUMXrUJ2E9QhQhxFtcK5rPyLdsGZvdbLMPdiQ=
 github.com/klauspost/compress v1.20.1/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/pierrec/lz4/v4 v4.1.33 h1:GjG1TJ1V4IzKP8L96muuuDNpTwd7D+l2ccXrjAbe014=
