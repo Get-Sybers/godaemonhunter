@@ -39,8 +39,12 @@ Adding an OS, or tuning a path, is a data change — not a code change
 
 ## What staging does to each file
 
-- **Directories** are walked without following symlinked subdirectories, so the
-  copy cannot loop or escape the live root.
+- **Directories** are walked without ever following a symlinked directory —
+  tree root or subdirectory alike — so a user-controlled artefact (a home's
+  `.config/systemd/user`, `.bash_sessions`, …) cannot redirect the copy at `/`,
+  `/proc` or another mount; the walk cannot loop or escape the live root. An
+  intermediate path symlink the OS resolves on its own is fine (a `/lib →
+  /usr/lib` root reaches a real `systemd/` and is walked).
 - **Regular files** are copied, deduped by `(device, inode)` so a file reached by
   two paths (a `/lib → /usr/lib` usrmerge symlink, overlapping trees) is staged
   once, and the original mtime is kept so a record's `SourceModified` is the
@@ -48,8 +52,10 @@ Adding an OS, or tuning a path, is a data change — not a code change
 - **`localtime`** symlinks are staged as their **target string**, because the
   zone name lives in the target, not the TZif content — exactly as an
   image-staged link presents it, so `gohost` reads the zone the same way.
-- **Other symlinks** are followed to their target file and its content copied
-  (so `/etc/os-release → /usr/lib/os-release` stages the real `os-release`).
+- **Other symlinks** are followed only to a **regular file that resolves inside
+  the live root** and its content copied (so `/etc/os-release → /usr/lib/os-release`
+  stages the real `os-release`); a target that climbs out of the root — an
+  absolute link in a bind-mounted host tree — is skipped.
 - **Sockets, devices and fifos** are skipped.
 
 ## Provenance

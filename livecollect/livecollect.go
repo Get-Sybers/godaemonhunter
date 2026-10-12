@@ -192,8 +192,14 @@ func Stage(opt Options) (Result, error) {
 	enc := json.NewEncoder(mf)
 	enc.SetEscapeHTML(false)
 
+	// realRoot is the live root with its own symlinks resolved — the boundary a
+	// followed symlink must stay inside. When it cannot be resolved the copy
+	// still never follows a symlinked directory, so the containment check simply
+	// degrades to that.
+	realRoot, _ := filepath.EvalSymlinks(opt.Root)
+
 	s := &stager{
-		root: opt.Root, scratch: scratch, max: opt.MaxFile,
+		root: opt.Root, realRoot: realRoot, scratch: scratch, max: opt.MaxFile,
 		logf: opt.Logf, enc: enc, seen: map[[2]uint64]bool{},
 	}
 	// a manifest-level metadata row: records whose per-file row does not say
@@ -214,15 +220,16 @@ func Stage(opt Options) (Result, error) {
 
 // stager carries one collection's state through the copy routines.
 type stager struct {
-	root    string
-	scratch string
-	max     int64
-	logf    func(string, ...any)
-	enc     *json.Encoder
-	seen    map[[2]uint64]bool // (dev,inode) already staged — usrmerge/overlap dedup
-	files   int
-	bytes   int64
-	skipped int
+	root     string
+	realRoot string
+	scratch  string
+	max      int64
+	logf     func(string, ...any)
+	enc      *json.Encoder
+	seen     map[[2]uint64]bool // (dev,inode) already staged — usrmerge/overlap dedup
+	files    int
+	bytes    int64
+	skipped  int
 }
 
 func (s *stager) log(format string, args ...any) {
@@ -231,27 +238,32 @@ func (s *stager) log(format string, args ...any) {
 	}
 }
 
-// copyTree stages one profile tree. A directory is walked (resilient to
-// unreadable entries); a single file is staged on its own. The walk never
-// descends a symlinked directory, so it cannot loop or escape the live root.
+// copyTree stages one profile tree or home artefact. The root is classified by
+// its own lstat: a symlink is handled as stageSymlink would any symlink — a
+// file target followed, a directory target skipped — a plain directory is
+// walked, and a plain file is copied. A symlinked directory is therefore never
+// walked, whether it is a tree root or an entry inside one, so a
+// user-controlled artefact (a home's .config/systemd/user, .bash_sessions, …)
+// cannot redirect the collection at /, /proc or another mount. An intermediate
+// path symlink the OS resolves on its own is fine: a /lib -> /usr/lib root
+// reaches a real systemd/ directory and is walked, deduped by inode against
+// usr/lib/systemd.
 func (s *stager) copyTree(rel string) {
 	src := filepath.Join(s.root, filepath.FromSlash(rel))
-	fi, err := os.Stat(src) // follow the root itself (a /lib -> /usr/lib root is fine)
+	li, err := os.Lstat(src)
 	if err != nil {
 		s.log("skip %s: %v", rel, err)
 		return
 	}
-	if !fi.IsDir() {
-		s.stageFile(rel, src)
+	switch {
+	case li.Mode()&fs.ModeSymlink != 0:
+		s.stageSymlink(rel, src)
+		return
+	case !li.IsDir():
+		s.copyRegular(rel, src, li)
 		return
 	}
-	walkSrc := src
-	if li, lerr := os.Lstat(src); lerr == nil && li.Mode()&fs.ModeSymlink != 0 {
-		if real, rerr := filepath.EvalSymlinks(src); rerr == nil {
-			walkSrc = real
-		}
-	}
-	filepath.WalkDir(walkSrc, func(p string, d fs.DirEntry, werr error) error {
+	filepath.WalkDir(src, func(p string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			s.log("skip %s: %v", p, werr) // unreadable dir/file — skip, never fatal
 			return nil
@@ -260,8 +272,8 @@ func (s *stager) copyTree(rel string) {
 			return nil
 		}
 		childRel := rel
-		if p != walkSrc {
-			sub, rerr := filepath.Rel(walkSrc, p)
+		if p != src {
+			sub, rerr := filepath.Rel(src, p)
 			if rerr != nil {
 				return nil
 			}
@@ -313,29 +325,16 @@ func (s *stager) stageEntry(rel, src string, typ fs.FileMode) {
 	}
 }
 
-// stageFile stages a profile tree that is a single path (lstat decides symlink
-// vs regular).
-func (s *stager) stageFile(rel, src string) {
-	li, err := os.Lstat(src)
-	if err != nil {
-		s.log("skip %s: %v", rel, err)
-		return
-	}
-	switch {
-	case li.Mode()&fs.ModeSymlink != 0:
-		s.stageSymlink(rel, src)
-	case li.Mode().IsRegular():
-		s.copyRegular(rel, src, li)
-	}
-}
-
 // stageSymlink preserves a symlink as the evidence wants it. For localtime the
 // zone name lives in the target, not the TZif content, so the target string is
 // staged verbatim — the gohost parser reads the zone after "zoneinfo/", exactly
-// as it does for an image-staged link. Every other symlink is followed and its
-// target file copied (so /etc/os-release -> /usr/lib/os-release stages the real
-// os-release); a symlink to a directory is not followed, so the walk stays
-// bounded.
+// as it does for an image-staged link. Every other symlink is followed only to
+// a regular file inside the live root and its content copied (so
+// /etc/os-release -> /usr/lib/os-release stages the real os-release). A symlink
+// to a directory is never followed — the collection stays in the known trees
+// and cannot be redirected at /, /proc or another mount — and a target that
+// resolves outside the live root (an absolute link in a bind-mounted host tree
+// pointing back at the collecting host) is not ours to copy.
 func (s *stager) stageSymlink(rel, src string) {
 	target, err := os.Readlink(src)
 	if err != nil {
@@ -346,15 +345,24 @@ func (s *stager) stageSymlink(rel, src string) {
 		s.writeText(rel, src, target)
 		return
 	}
-	fi, err := os.Stat(src) // follow
+	real, err := filepath.EvalSymlinks(src)
 	if err != nil {
 		s.log("skip dangling %s -> %s", rel, target)
+		return
+	}
+	if s.realRoot != "" && !withinRoot(s.realRoot, real) {
+		s.log("skip %s: target %s escapes the live root", rel, real)
+		return
+	}
+	fi, err := os.Stat(real)
+	if err != nil {
+		s.log("skip %s: %v", rel, err)
 		return
 	}
 	if fi.IsDir() || !fi.Mode().IsRegular() {
 		return
 	}
-	s.copyRegular(rel, src, fi)
+	s.copyRegular(rel, real, fi)
 }
 
 // copyRegular copies one file into the stage, deduped by (dev,inode) so a file
@@ -474,4 +482,16 @@ func firstErr(errs ...error) error {
 		}
 	}
 	return nil
+}
+
+// withinRoot reports whether target (a resolved path) stays inside root (the
+// resolved live root): a followed symlink must not leave the tree being
+// collected. A component merely starting with ".." (a file literally named
+// "..x") is inside; only "." and a path that climbs out ("..", "../…") count.
+func withinRoot(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }

@@ -125,6 +125,74 @@ func TestStageMaxFile(t *testing.T) {
 	}
 }
 
+// TestStageRejectsSymlinkEscape is the guard on the "cannot escape the live
+// root" invariant: a user-controlled home artefact that is a symlink — a
+// directory pointed outside the tree, or a file pointed at an external file —
+// must not be followed, even though the collector runs as root. Before the fix
+// a symlinked artefact *root* was resolved and walked, so a planted
+// `.config/systemd/user -> /` (or `/proc`) let the walk leave the tree.
+func TestStageRejectsSymlinkEscape(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	mk(t, filepath.Join(outside, "systemd/pwned.service"), "[Service]\n")
+	mk(t, filepath.Join(outside, "secret"), "TOPSECRET\n")
+	mk(t, filepath.Join(root, "home/alice/.bash_history"), "id\n") // a legit artefact
+	if err := os.MkdirAll(filepath.Join(root, "home/alice/.config/systemd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// a directory artefact pointed outside the live root, and a file artefact
+	// pointed at an external regular file.
+	if err := os.Symlink(filepath.Join(outside, "systemd"), filepath.Join(root, "home/alice/.config/systemd/user")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret"), filepath.Join(root, "home/alice/.sh_history")); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Stage(Options{OS: "linux", Root: root, WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	if !staged(t, res.Dir, "home/alice/.bash_history") {
+		t.Error("legit .bash_history was not staged")
+	}
+	if staged(t, res.Dir, "home/alice/.config/systemd/user/pwned.service") {
+		t.Error("followed a symlinked directory out of the live root")
+	}
+	if staged(t, res.Dir, "home/alice/.sh_history") {
+		t.Error("followed a file symlink out of the live root")
+	}
+	if hits, _ := filepath.Glob(filepath.Join(res.Dir, "home/alice/.config/systemd/user", "*")); len(hits) != 0 {
+		t.Errorf("contents of an escaped directory were staged: %v", hits)
+	}
+}
+
+// TestStageFollowsFileSymlinkWithinRoot keeps the legitimate case working: a
+// file symlink to a regular file inside the live root is followed and its
+// content copied — this is what stages a real os-release behind the common
+// /etc/os-release -> /usr/lib/os-release link (the link text would not parse).
+func TestStageFollowsFileSymlinkWithinRoot(t *testing.T) {
+	root := t.TempDir()
+	const body = "ID=debian\nPRETTY_NAME=\"Debian\"\n"
+	mk(t, filepath.Join(root, "usr/lib/os-release"), body)
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../usr/lib/os-release", filepath.Join(root, "etc/os-release")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Stage(Options{OS: "linux", Root: root, WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(res.Dir, "etc/os-release"))
+	if err != nil {
+		t.Fatalf("etc/os-release not staged: %v", err)
+	}
+	if string(got) != body {
+		t.Errorf("etc/os-release staged as %q, want the followed content %q", got, body)
+	}
+}
+
 func TestStageDarwin(t *testing.T) {
 	root := t.TempDir()
 	mk(t, filepath.Join(root, "System/Library/CoreServices/SystemVersion.plist"), "<plist/>\n")
