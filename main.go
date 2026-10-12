@@ -33,6 +33,15 @@
 // <OUT_DIR>/knowledge/<image>/ and the records under
 // <OUT_DIR>/<subtool>/<image>/, the scratch goes. Nothing is exported.
 //
+// And a live system is a host too (livecollect): GODAEMONHUNTER_LIVE (or a
+// sub-tool's <SUBTOOL>_LIVE) runs the parsers ON the running host. Instead of
+// gomount decoding an image, livecollect copies the known artefact surface out
+// of the live root (GODAEMONHUNTER_LIVE_ROOT, default /) into the work dir — so
+// the walk never touches /proc, /sys or other mounts and a per-file read
+// failure is skipped, not fatal — and the same layered run goes over that
+// stage, the host folder named for the live host. LIVE and IMAGE are mutually
+// exclusive: a run is on one source.
+//
 // (`hunt` stays accepted as the explicit word for the default run.) The
 // multi-tool dispatcher shape of docs/framework/04 §4.3 (the plaso and
 // signatures precedent). There are no standalone per-parser binaries or
@@ -48,12 +57,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Get-Sybers/gopinfo"
 	"github.com/Get-Sybers/gopinfo/batch"
+	"github.com/Get-Sybers/gopinfo/toolkit"
 
 	"github.com/Get-Sybers/godaemonhunter/auditd"
 	"github.com/Get-Sybers/godaemonhunter/cron"
@@ -61,6 +73,7 @@ import (
 	"github.com/Get-Sybers/godaemonhunter/host"
 	"github.com/Get-Sybers/godaemonhunter/journal"
 	"github.com/Get-Sybers/godaemonhunter/launchd"
+	"github.com/Get-Sybers/godaemonhunter/livecollect"
 	"github.com/Get-Sybers/godaemonhunter/machost"
 	"github.com/Get-Sybers/godaemonhunter/macusers"
 	"github.com/Get-Sybers/godaemonhunter/network"
@@ -165,6 +178,13 @@ func run(args []string, getenv func(string) string, stdout io.Writer) int {
 			continue
 		}
 		if len(args) == 1 {
+			liveSet, lerr := batch.ParseBool(getenv(batch.Prefix(s.tool.Name) + "_LIVE"))
+			if lerr != nil {
+				return configErrorSummary(s.name, fmt.Errorf("%s_LIVE: %w", batch.Prefix(s.tool.Name), lerr), stdout)
+			}
+			if liveSet {
+				return runSubOnLive(s, getenv, stdout)
+			}
 			if img := getenv(batch.Prefix(s.tool.Name) + "_IMAGE"); img != "" {
 				return runSubOnImage(s, img, getenv, stdout)
 			}
@@ -218,6 +238,7 @@ type huntSummary struct {
 	KnowledgeDir string          `json:"knowledge_dir"`
 	Streams      []string        `json:"streams"`
 	Images       []string        `json:"images,omitempty"` // the disk images run on, by item name
+	Live         string          `json:"live,omitempty"`   // the live host run on, by item name
 	Subtools     []batch.Summary `json:"subtools"`
 	Failures     []batch.Failure `json:"failures,omitempty"` // an image that could not be read
 	Exit         int             `json:"exit"`
@@ -250,6 +271,92 @@ func runSubOnImage(s sub, selected string, getenv func(string) string, stdout io
 		"INPUT_DIR": scratch, "OUT_DIR": filepath.Join(out, diskimage.ImageItemName(in, images[0])), "IMAGE": "",
 	})
 	return batch.Run(s.tool, batch.Options{Version: version, Contract: contractYML}, shim, stdout)
+}
+
+// runSubOnLive is one parser's batch mode on the live host: livecollect stages
+// the artefact surface into scratch, the batch loop runs over that into
+// <OUT_DIR>/<item>/, and the parser's ordinary summary line is printed. LIVE
+// and IMAGE are mutually exclusive.
+func runSubOnLive(s sub, getenv func(string) string, stdout io.Writer) int {
+	pfx := batch.Prefix(s.tool.Name) + "_"
+	get := func(suffix, def string) string {
+		if v := getenv(pfx + suffix); v != "" {
+			return v
+		}
+		return def
+	}
+	if get("IMAGE", "") != "" {
+		return configErrorSummary(s.name, fmt.Errorf("LIVE and IMAGE are mutually exclusive — a run is on one source"), stdout)
+	}
+	work, out := get("WORK_DIR", "/work"), get("OUT_DIR", "/output")
+	res, item, err := stageLive(get, work, strings.EqualFold(get("LOG_LEVEL", "info"), "debug"))
+	if err != nil {
+		return configErrorSummary(s.name, err, stdout)
+	}
+	defer os.RemoveAll(res.Dir)
+	shim := shimEnv(s.tool, getenv, map[string]string{
+		"INPUT_DIR": res.Dir, "OUT_DIR": filepath.Join(out, item), "IMAGE": "", "LIVE": "",
+	})
+	return batch.Run(s.tool, batch.Options{Version: version, Contract: contractYML}, shim, stdout)
+}
+
+// stageLive collects the live host's artefact surface into scratch and returns
+// the stage plus the host item name. get reads the caller's variable block
+// (GODAEMONHUNTER_* for the hunt, <SUBTOOL>_* for a sub-tool run): LIVE_ROOT
+// (default /), LIVE_OS (default this host's GOOS) and LIVE_MAX_FILE (a byte
+// cap, 0 = none).
+func stageLive(get func(suffix, def string) string, work string, debug bool) (livecollect.Result, string, error) {
+	root := get("LIVE_ROOT", "/")
+	st, err := os.Stat(root)
+	if err != nil {
+		return livecollect.Result{}, "", fmt.Errorf("LIVE_ROOT %s: %w", root, err)
+	}
+	if !st.IsDir() {
+		return livecollect.Result{}, "", fmt.Errorf("LIVE_ROOT %s: not a directory", root)
+	}
+	maxFile, err := parseMaxFile(get("LIVE_MAX_FILE", "0"))
+	if err != nil {
+		return livecollect.Result{}, "", err
+	}
+	item := liveItemName()
+	var logf func(string, ...any)
+	if debug {
+		logf = func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "godaemonhunter: live: "+format+"\n", args...)
+		}
+	}
+	res, err := livecollect.Stage(livecollect.Options{
+		Root: root, OS: get("LIVE_OS", runtime.GOOS), WorkDir: work,
+		Item: item, MaxFile: maxFile, Logf: logf,
+	})
+	if err != nil {
+		return livecollect.Result{}, "", err
+	}
+	fmt.Fprintf(os.Stderr, "godaemonhunter: live: staged %d files, %d bytes, %d skipped from %s [%s]\n",
+		res.Files, res.Bytes, res.Skipped, root, res.OS)
+	return res, item, nil
+}
+
+// liveItemName names the live host's output folder: the running host's name,
+// folded to one safe path element, or "live" when it cannot be read.
+func liveItemName() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return "live"
+	}
+	if h = strings.TrimSpace(h); h == "" {
+		return "live"
+	}
+	return toolkit.FoldName("/", "/"+h)
+}
+
+// parseMaxFile reads LIVE_MAX_FILE: a non-negative byte count, 0 meaning no cap.
+func parseMaxFile(s string) (int64, error) {
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("LIVE_MAX_FILE: %q is not a non-negative byte count", s)
+	}
+	return n, nil
 }
 
 // configErrorSummary prints a parser-shaped config_error summary line.
@@ -309,36 +416,64 @@ func runHunt(getenv func(string) string, stdout io.Writer, words []string) int {
 		Started: started.UTC().Format(time.RFC3339),
 	}
 
-	// the passes: the loose tree itself (only when no image is selected),
-	// then every disk image — each pulled into scratch by gomount and run as
-	// its own host: knowledge at <kdir>/<image>/, records under
-	// <OUT_DIR>/<subtool>/<image>/
+	// the passes: the one source this run is on. A live host (livecollect)
+	// or one or more disk images (gomount) each become their own host —
+	// knowledge at <kdir>/<host>/, records under <OUT_DIR>/<subtool>/<host>/ —
+	// and a loose tree (neither live nor image) is the input dir itself. LIVE
+	// and IMAGE are mutually exclusive: a run is on one source.
 	type pass struct{ in, host, scratch string }
 	var passes []pass
-	selected := get("IMAGE", "")
-	images, err := diskimage.SelectedImages(in, selected)
+	sawOK, sawPartial, sawConfig := false, false, false
+
+	live, err := batch.ParseBool(get("LIVE", "0"))
 	if err != nil {
 		sum.Status, sum.Exit = "config_error", 2
-		sum.Failures = []batch.Failure{{Item: selected, Error: err.Error()}}
-		fmt.Fprintf(os.Stderr, "godaemonhunter: %v\n", err)
+		sum.Failures = []batch.Failure{{Item: "GODAEMONHUNTER_LIVE", Error: err.Error()}}
+		fmt.Fprintf(os.Stderr, "godaemonhunter: GODAEMONHUNTER_LIVE: %v\n", err)
 		return writeHunt(sum, started, stdout)
 	}
-	if selected == "" {
-		passes = append(passes, pass{in: in})
-	}
-	sawOK, sawPartial, sawConfig := false, false, false
-	for _, img := range images {
-		host := diskimage.ImageItemName(in, img)
-		scratch, err := materialiseImage(getenv, work, img, imageSets)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "godaemonhunter: %s: %v\n", host, err)
-			sum.Failed++
-			sum.Failures = append(sum.Failures, batch.Failure{Item: img, Error: err.Error()})
-			sawPartial = true
-			continue
+	if live {
+		if get("IMAGE", "") != "" {
+			err := fmt.Errorf("LIVE and IMAGE are mutually exclusive — a run is on one source")
+			sum.Status, sum.Exit = "config_error", 2
+			sum.Failures = []batch.Failure{{Item: "live", Error: err.Error()}}
+			fmt.Fprintf(os.Stderr, "godaemonhunter: %v\n", err)
+			return writeHunt(sum, started, stdout)
 		}
-		sum.Images = append(sum.Images, host)
-		passes = append(passes, pass{in: scratch, host: host, scratch: scratch})
+		res, host, err := stageLive(get, work, strings.EqualFold(level, "debug"))
+		if err != nil {
+			sum.Status, sum.Exit = "config_error", 2
+			sum.Failures = []batch.Failure{{Item: "live", Error: err.Error()}}
+			fmt.Fprintf(os.Stderr, "godaemonhunter: live: %v\n", err)
+			return writeHunt(sum, started, stdout)
+		}
+		sum.Live = host
+		passes = append(passes, pass{in: res.Dir, host: host, scratch: res.Dir})
+	} else {
+		selected := get("IMAGE", "")
+		images, err := diskimage.SelectedImages(in, selected)
+		if err != nil {
+			sum.Status, sum.Exit = "config_error", 2
+			sum.Failures = []batch.Failure{{Item: selected, Error: err.Error()}}
+			fmt.Fprintf(os.Stderr, "godaemonhunter: %v\n", err)
+			return writeHunt(sum, started, stdout)
+		}
+		if selected == "" {
+			passes = append(passes, pass{in: in})
+		}
+		for _, img := range images {
+			host := diskimage.ImageItemName(in, img)
+			scratch, err := materialiseImage(getenv, work, img, imageSets)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "godaemonhunter: %s: %v\n", host, err)
+				sum.Failed++
+				sum.Failures = append(sum.Failures, batch.Failure{Item: img, Error: err.Error()})
+				sawPartial = true
+				continue
+			}
+			sum.Images = append(sum.Images, host)
+			passes = append(passes, pass{in: scratch, host: host, scratch: scratch})
+		}
 	}
 
 	for _, p := range passes {

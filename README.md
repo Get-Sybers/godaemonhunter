@@ -116,6 +116,10 @@ the stage, never from the parser.
 | `GODAEMONHUNTER_KNOWLEDGE_DIR` | *(empty)* | override the knowledge store location; empty = `<OUT_DIR>/knowledge`, built by Layer 1 in the same run |
 | `GODAEMONHUNTER_WORK_DIR` | `/work` | scratch (writable tmpfs), shared by every sub-run; a disk image's linux-core surface is pulled here while its parsers run — bind a disk-backed directory for large images |
 | `GODAEMONHUNTER_IMAGE` | *(empty)* | run **on a disk image**: its path relative to `INPUT_DIR` (E01/Ex01, raw, VMDK, VHDX, VHD, QCOW2, VDI, DMG (.dmg), sparseimage (.sparseimage)). The baked-in [gomount](../gomount) pulls the `linux-core` surface out of the root volume into `WORK_DIR`, the layered run goes over that as over a staged root tree, the knowledge store lands at `<KNOWLEDGE_DIR>/<image>/` and the records under `<OUT_DIR>/<subtool>/<image>/…`, the scratch goes — nothing is exported. Empty = the loose tree itself plus every image directly under it. A sub-tool run reads `<SUBTOOL>_IMAGE` and writes `<OUT_DIR>/<image>/…` |
+| `GODAEMONHUNTER_LIVE` | `0` | run **on the live host** (see [Running on a live system](#running-on-a-live-system)): `1/true/yes/on` stages the known artefact surface of the live root and runs the layered pipeline over it. Mutually exclusive with `GODAEMONHUNTER_IMAGE`; `INPUT_DIR` is unused |
+| `GODAEMONHUNTER_LIVE_ROOT` | `/` | the live root `LIVE` collects from — a read-only bind-mount of the host filesystem (a live-response container) or a staged root tree |
+| `GODAEMONHUNTER_LIVE_OS` | *(this host's OS)* | the live-collection profile: `linux` or `darwin` ([`livecollect/profiles.json`](livecollect/profiles.json)) |
+| `GODAEMONHUNTER_LIVE_MAX_FILE` | `0` | per-file byte cap on the live collection; `0` = no cap — bind a disk-backed work dir for a large collection |
 | `GODAEMONHUNTER_FORCE` | `0` | `1/true/yes/on`: rerun items that already have valid output, in every sub-run |
 | `GODAEMONHUNTER_LOG_LEVEL` | `info` | `error\|warn\|info\|debug`, stderr only, applied to every sub-run |
 
@@ -123,6 +127,53 @@ A single-parser sub-run (`godaemonhunter gowtmp`) ignores the
 `GODAEMONHUNTER_*` block and reads that tool's canonical `<SUBTOOL>_*`
 variables instead (`GOWTMP_INPUT_DIR`, `GOWTMP_OUT_DIR`, …) — each
 parser package's README documents its block.
+
+## Running on a live system
+
+A disk image is a host, and so is the machine the binary is running on.
+Set `GODAEMONHUNTER_LIVE=1` (mutually exclusive with
+`GODAEMONHUNTER_IMAGE`) and the baked-in
+[`livecollect`](livecollect/README.md) copies the known artefact surface
+out of the live root into the work dir — **only** the known trees, never
+`/proc`, `/sys` or other mounts, and a per-file read failure is logged and
+skipped rather than fatal — then the same layered run goes over that
+snapshot. The knowledge store lands at `<KNOWLEDGE_DIR>/<host>/` and the
+records under `<OUT_DIR>/<subtool>/<host>/`, the host folder named for the
+live host; the scratch goes, nothing is exported. Each record's
+`Origin.Path` is its real on-host path and it carries no `Snapshot` — the
+live volume.
+
+Why not point `INPUT_DIR` at `/` instead: every parser discovers its files
+by recursing the whole input root, and that walk fails the run on the first
+unreadable directory. A live `/` would descend `/proc`, `/sys` and every
+mounted filesystem and die at once. Staging only the known surface sidesteps
+that and captures a point-in-time snapshot of volatile logs — the
+forensically correct behaviour for a running host.
+
+```sh
+# collect and parse the running host — run as root for the full surface
+# (shadow, audit, the journal, every user's home)
+GODAEMONHUNTER_LIVE=1 GODAEMONHUNTER_OUT_DIR=./out godaemonhunter
+
+# from a container with the host filesystem bind-mounted read-only at /host
+GODAEMONHUNTER_LIVE=1 GODAEMONHUNTER_LIVE_ROOT=/host GODAEMONHUNTER_OUT_DIR=./out godaemonhunter
+
+# one parser, live
+GOSYSLOG_LIVE=1 GOSYSLOG_OUT_DIR=./out godaemonhunter gosyslog
+```
+
+**macOS is the same live run.** On a Mac the `darwin` profile collects the
+property lists, the launchd jobs and disabled-overrides tables, the
+OpenDirectory dslocal node, the ASL-fed system logs, utmpx, the periodic and
+at jobs and the per-session histories — and because the live `/` already
+merges the System and Data volumes there is no two-volume step the image path
+needs. Not yet read, as for an image: the unified log (`tracev3`), ASL
+stores, BTM login items, the TCC/KnowledgeC/quarantine databases and
+fseventsd.
+
+The exact set each profile collects is data —
+[`livecollect/profiles.json`](livecollect/profiles.json) — so tuning a path
+or adding an OS is a data change.
 
 ## Output
 

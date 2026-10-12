@@ -1,0 +1,67 @@
+{
+  "linux": {
+    "os": "linux",
+    "trees": [
+      {"path": "etc", "note": "host identity (os-release, hostname, machine-id, timezone, localtime, locale), accounts (passwd/shadow/group, sudoers, ssh), network (hosts, resolv.conf, nsswitch, NetworkManager, systemd-networkd, netplan, firewall), systemd admin units, cron (crontab, cron.d, cron.{hourly,daily,weekly,monthly}, anacrontab), sysctl/modules/ld.so policy"},
+      {"path": "usr/lib/systemd", "note": "vendor systemd units, timers, sockets, mounts"},
+      {"path": "lib/systemd", "note": "vendor systemd units on a pre-usrmerge layout (deduped against usr/lib/systemd when /lib is a symlink)"},
+      {"path": "run/systemd", "note": "runtime (generated) systemd units"},
+      {"path": "var/log", "note": "syslog family, auth/secure, audit.log, the persistent journal, wtmp/btmp/lastlog, boot.log"},
+      {"path": "run/log/journal", "note": "the volatile journal"},
+      {"path": "var/spool/cron", "note": "user crontabs (crontabs/), at jobs (atjobs/)"},
+      {"path": "var/spool/at", "note": "at jobs on a Red Hat layout"}
+    ],
+    "homes": {
+      "roots": ["home/*", "root"],
+      "artefacts": [
+        ".bash_history",
+        ".zsh_history",
+        ".sh_history",
+        ".ash_history",
+        ".python_history",
+        ".mysql_history",
+        ".psql_history",
+        ".local/share/fish/fish_history",
+        ".bash_sessions",
+        ".zsh_sessions",
+        ".ssh/authorized_keys",
+        ".ssh/authorized_keys2",
+        ".ssh/known_hosts",
+        ".config/systemd/user",
+        ".local/share/Trash"
+      ]
+    }
+  },
+  "darwin": {
+    "os": "darwin",
+    "trees": [
+      {"path": "System/Library/CoreServices/SystemVersion.plist", "note": "the OS version (gomachost os_release)"},
+      {"path": "Library/Preferences/SystemConfiguration/preferences.plist", "note": "the configured host names and model (gomachost hostname)"},
+      {"path": "Library/Preferences/.GlobalPreferences.plist", "note": "the system time zone and locale (gomachost globalprefs)"},
+      {"path": "private/etc", "note": "localtime (zone), master.passwd/passwd/group, sudoers(.d), ssh, hosts/resolv.conf/nsswitch, the periodic run-parts and periodic.conf, crontab"},
+      {"path": "private/var/db/dslocal/nodes", "note": "the OpenDirectory local node: dslocal users and groups (gomacusers)"},
+      {"path": "private/var/db/com.apple.xpc.launchd", "note": "the launchd disabled-overrides tables (golaunchd override)"},
+      {"path": "Library/LaunchDaemons", "note": "third-party LaunchDaemons (golaunchd job)"},
+      {"path": "Library/LaunchAgents", "note": "third-party LaunchAgents (golaunchd job)"},
+      {"path": "System/Library/LaunchDaemons", "note": "Apple's own LaunchDaemons (golaunchd job)"},
+      {"path": "System/Library/LaunchAgents", "note": "Apple's own LaunchAgents (golaunchd job)"},
+      {"path": "private/var/log", "note": "system.log, install.log, wifi.log, fsck_hfs.log, fsck_apfs.log and their bzip2 rotations (gosyslog)"},
+      {"path": "private/var/run/utmpx", "note": "the 628-byte utmpx login records (gowtmp)"},
+      {"path": "private/var/at", "note": "user crontabs (tabs/) and at jobs (jobs/) (gocron)"}
+    ],
+    "homes": {
+      "roots": ["Users/*", "private/var/root"],
+      "artefacts": [
+        ".bash_history",
+        ".zsh_history",
+        ".sh_history",
+        ".bash_sessions",
+        ".zsh_sessions",
+        ".ssh/authorized_keys",
+        ".ssh/authorized_keys2",
+        ".ssh/known_hosts",
+        "Library/LaunchAgents"
+      ]
+    }
+  }
+}

@@ -14,8 +14,11 @@ description: >
   logs, utmpx, at tabs and periodic scripts, per-session histories,
   master.passwd). The parameter is the STREAM — a byakugan model word
   scoping the run to the parsers that feed that model; no arguments is
-  every stream, the default. One binary, one run, one structured output
-  tree, one JSON summary line.
+  every stream, the default. The same layered run goes over whichever
+  source is named: a staged evidence tree, a disk image
+  (GODAEMONHUNTER_IMAGE), or the live host it is running on
+  (GODAEMONHUNTER_LIVE, Linux and macOS). One binary, one run, one
+  structured output tree, one JSON summary line.
 
 # The calling vocabulary (decision 17): every accepted stream word IS a
 # byakugan model (model/car/objects at the BYAKUGAN_REF pin). Bare
@@ -44,14 +47,23 @@ env:
   GODAEMONHUNTER_KNOWLEDGE_DIR: {required: false, default: "",      desc: 'override the knowledge store location; empty = <OUT_DIR>/knowledge, built by Layer 1 in the same run'}
   GODAEMONHUNTER_WORK_DIR:      {required: false, default: /work,   desc: 'scratch (writable tmpfs), shared by every sub-run; a disk image''s linux-core / macos-core surface is pulled here while its parsers run, so bind a disk-backed dir for large images'}
   GODAEMONHUNTER_IMAGE:         {required: false, default: "",      desc: 'run ON one disk image: its path relative to INPUT_DIR (E01/Ex01, raw, VMDK, VHDX, VHD, QCOW2, VDI, DMG (.dmg), sparseimage (.sparseimage)). The baked-in gomount pulls the linux-core and macos-core surfaces (docs/linux §5.4; whichever the OS volume holds — a Mac''s APFS Data volume or HFS+ volume resolves like a Linux root) into WORK_DIR, the layered run goes over that as over a staged root tree, the knowledge store lands at <KNOWLEDGE_DIR>/<image>/ and the records under <OUT_DIR>/<subtool>/<image>/, nothing is exported. Empty = the loose tree itself plus every image directly under it; a sub-tool run reads <SUBTOOL>_IMAGE and writes <OUT_DIR>/<image>/'}
+  GODAEMONHUNTER_LIVE:          {required: false, default: "0", type: bool, desc: 'run ON the live host (livecollect): 1/true/yes/on copies the known artefact surface out of LIVE_ROOT into WORK_DIR — only the known trees, never /proc, /sys or other mounts; a per-file read failure is skipped, not fatal — and the layered run goes over that stage, the host folder named for the live host. Mutually exclusive with IMAGE; INPUT_DIR is unused. A sub-tool run reads <SUBTOOL>_LIVE'}
+  GODAEMONHUNTER_LIVE_ROOT:     {required: false, default: /,       desc: 'the live root LIVE collects from; point at a read-only bind-mount of the host filesystem (a live-response container) or a staged root tree. The records'' Origin.Path is the real on-host path regardless of where this points'}
+  GODAEMONHUNTER_LIVE_OS:       {required: false, default: "",      desc: 'the live-collection profile to use; empty = this host''s OS. Supported: linux, darwin (livecollect/profiles.json)'}
+  GODAEMONHUNTER_LIVE_MAX_FILE: {required: false, default: "0",     desc: 'per-file byte cap on the live collection; 0 = no cap. Bind a disk-backed WORK_DIR for a large collection'}
   GODAEMONHUNTER_FORCE:         {required: false, default: "0", type: bool, desc: '1/true/yes/on reruns items that already have valid output, in every sub-run'}
   GODAEMONHUNTER_LOG_LEVEL:     {required: false, default: info,    desc: 'error|warn|info|debug, stderr only, applied to every sub-run'}
 
+# The run's source is exactly one of: the INPUT_DIR tree (a loose staged tree,
+# or the disk image(s) under it via IMAGE) or the live host (LIVE). The input
+# mount is therefore not required for a live run — LIVE_ROOT provides the
+# source, typically a read-only bind-mount of the host filesystem.
 mounts:
-  - {name: input,     path: /input,     mode: ro, env: GODAEMONHUNTER_INPUT_DIR, required: true}
+  - {name: input,     path: /input,     mode: ro, env: GODAEMONHUNTER_INPUT_DIR, required: false}
   - {name: output,    path: /output,    mode: rw, env: GODAEMONHUNTER_OUT_DIR,   required: true}
   - {name: knowledge, path: /knowledge, mode: rw, env: GODAEMONHUNTER_KNOWLEDGE_DIR, required: false}
   - {name: work,      path: /work,      mode: rw, env: GODAEMONHUNTER_WORK_DIR,  required: false}
+  - {name: live_root, path: /host,      mode: ro, env: GODAEMONHUNTER_LIVE_ROOT, required: false}
 
 network: none
 exit_codes: {0: success, 1: nothing_produced, 2: config_error, 3: partial}
