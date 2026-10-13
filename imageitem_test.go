@@ -10,11 +10,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/Get-Sybers/gopinfo/diskimage"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Get-Sybers/gopinfo/diskimage"
 )
 
 func gomountStub(t *testing.T) string {

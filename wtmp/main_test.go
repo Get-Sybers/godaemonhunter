@@ -39,13 +39,13 @@ func mkUtmp(ut int16, pid int32, line, id, user, host string, ip net.IP, sec, us
 }
 
 func mkLastlog(slots map[uint32][3]string) []byte { // uid -> {secStr,line,host}
-	max := uint32(0)
+	maxUID := uint32(0)
 	for uid := range slots {
-		if uid > max {
-			max = uid
+		if uid > maxUID {
+			maxUID = uid
 		}
 	}
-	b := make([]byte, (max+1)*lastlogLen)
+	b := make([]byte, (maxUID+1)*lastlogLen)
 	for uid, s := range slots {
 		off := uid * lastlogLen
 		var sec int64
