@@ -27,6 +27,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -69,10 +70,14 @@ func materialiseImage(getenv func(string) string, work, image string, sets []str
 		os.RemoveAll(scratch)
 		return "", err
 	}
-	if err := materialiseMacSystem(getenv, scratch, image); err != nil {
-		// the second pass is best-effort: the Data volume's surface is
-		// staged, the System volume's is reported and skipped
-		fmt.Fprintf(os.Stderr, "godaemonhunter: %s: system volume: %v\n", filepath.Base(image), err)
+	// the second pass is best-effort: the Data volume's surface is staged,
+	// the System volume's is reported and skipped. A collection is one
+	// host's root tree, never a Mac Data/System pair, so it gets no second
+	// identify (which would spool a gzip'd archive once more for nothing).
+	if !isArchiveItem(image) {
+		if err := materialiseMacSystem(getenv, work, scratch, image); err != nil {
+			fmt.Fprintf(os.Stderr, "godaemonhunter: %s: system volume: %v\n", filepath.Base(image), err)
+		}
 	}
 	return scratch, nil
 }
@@ -169,19 +174,26 @@ func selectedItems(in, selected string) ([]string, error) {
 // discoverCollections lists the UAC collections directly under in: every
 // archive candidate by name (discoverArchives) that gomount identify
 // confirms by content — a volume of fstype `uac`. A zip or tar of anything
-// else is not an item; an archive identify cannot read is reported and
-// skipped.
-func discoverCollections(getenv func(string) string, in string) []string {
+// else is not an item, and an archive identify cannot read is not one
+// either; both are reported on stderr and skipped. The identify runs
+// spool under the work dir, which is made first.
+func discoverCollections(getenv func(string) string, in, work string) []string {
+	cands := discoverArchives(in)
+	if len(cands) > 0 {
+		_ = os.MkdirAll(work, 0o755) // gomount reports a work dir it cannot use
+	}
 	var out []string
-	for _, p := range discoverArchives(in) {
-		vols, err := identifyVolumes(getenv, p)
+	for _, p := range cands {
+		vols, err := identifyVolumes(getenv, work, p)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "godaemonhunter: %s: not readable as a collection (%v) — skipped\n", filepath.Base(p), err)
 			continue
 		}
-		if isCollection(vols) {
-			out = append(out, p)
+		if !isCollection(vols) {
+			fmt.Fprintf(os.Stderr, "godaemonhunter: %s: not a UAC collection — skipped\n", filepath.Base(p))
+			continue
 		}
+		out = append(out, p)
 	}
 	return out
 }
@@ -196,12 +208,21 @@ func isCollection(vols []identifiedVolume) bool {
 	return false
 }
 
-// identifyVolumes asks gomount for the image's resolved stack.
-func identifyVolumes(getenv func(string) string, image string) ([]identifiedVolume, error) {
+// identifyVolumes asks gomount for the image's resolved stack. The run
+// gets TMPDIR = the work dir exactly as materialise does: identify spools a
+// gzip'd collection too, and the container's /tmp is a small tmpfs — or,
+// in a FROM scratch image, not there at all. gomount's first stderr line
+// rides the error, so a skipped candidate says why.
+func identifyVolumes(getenv func(string) string, work, image string) ([]identifiedVolume, error) {
 	cmd := exec.Command(diskimage.GomountPath(getenv), "identify", image)
-	cmd.Stderr = nil
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	cmd.Env = append(os.Environ(), "TMPDIR="+work)
 	out, err := cmd.Output()
 	if err != nil {
+		if line, _, _ := strings.Cut(strings.TrimSpace(stderr.String()), "\n"); line != "" {
+			return nil, fmt.Errorf("%w: %s", err, line)
+		}
 		return nil, err
 	}
 	var doc struct {
@@ -221,8 +242,8 @@ func identifyVolumes(getenv func(string) string, image string) ([]identifiedVolu
 // appended (each row names its own volume, so provenance stays exact).
 // An image without that pair, or a gomount without identify, is left as
 // the first pass staged it.
-func materialiseMacSystem(getenv func(string) string, scratch, image string) error {
-	vols, err := identifyVolumes(getenv, image)
+func materialiseMacSystem(getenv func(string) string, work, scratch, image string) error {
+	vols, err := identifyVolumes(getenv, work, image)
 	if err != nil {
 		return nil // no stack to consult: nothing to add
 	}

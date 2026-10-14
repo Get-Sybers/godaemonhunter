@@ -468,7 +468,7 @@ func runHunt(getenv func(string) string, stdout io.Writer, words []string) int {
 		if selected == "" {
 			passes = append(passes, pass{in: in})
 			// the UAC collections beside the disk images (imageitem.go)
-			images = append(images, discoverCollections(getenv, in)...)
+			images = append(images, discoverCollections(getenv, in, work)...)
 		}
 		for _, img := range images {
 			host := diskimage.ImageItemName(in, img)

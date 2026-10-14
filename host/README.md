@@ -52,12 +52,15 @@ is joined onto every record as `Origin`/`Snapshot`/`Residue`.
 
 `<OUT_DIR>/<item>/gohost.jsonl`, one folder per input file; `RecordType`
 is `os_release`, `hostname`, `machine_id`, `timezone`, `locale`,
-`fstab_entry` or `crypttab_entry`. An `etc/lsb-release` (Debian, Ubuntu)
-yields an `os_release` row too, its `DISTRIB_*` keys lifted the same way
-(`DISTRIB_ID` → `Name` and a lower-cased `ID`, `DISTRIB_RELEASE` →
-`VersionID`, `DISTRIB_DESCRIPTION` → `PrettyName`): the fallback identity
-when `etc/os-release` is a symlink into `/usr/lib` whose target the
-evidence does not hold (a UAC collection that copied `/etc` alone).
+`fstab_entry`, `crypttab_entry` or `lsb_release`. An `etc/lsb-release`
+(Debian, Ubuntu) is parsed into the `os_release` shape, its `DISTRIB_*`
+keys lifted the same way (`DISTRIB_ID` → `Name` and a lower-cased `ID`,
+`DISTRIB_RELEASE` → `VersionID`, `DISTRIB_DESCRIPTION` → `PrettyName`).
+It is the `os_release` row only when the staged tree has no os-release
+identity — `etc/os-release` a symlink into `/usr/lib` whose target the
+evidence does not hold, staged as its link text (a UAC collection that
+copied `/etc` alone) — and an `lsb_release` row otherwise, so the
+knowledge store's `OS` stays `PRETTY_NAME` where os-release is readable.
 
 ## Exit codes
 

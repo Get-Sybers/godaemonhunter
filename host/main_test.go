@@ -52,15 +52,16 @@ func TestOsReleaseAndOneLiners(t *testing.T) {
 	if r := parse(t, "locale", "LANG=en_US.UTF-8\n")[0]; r["Lang"] != "en_US.UTF-8" {
 		t.Fatalf("locale: %v", r)
 	}
-	// lsb-release: the same os_release row, the DISTRIB_* keys lifted
+	// lsb-release: the os_release shape under its own RecordType when it
+	// stands alone (the fallback form is TestLSBReleasePrecedence)
 	lsb := parse(t, "lsb_release", "DISTRIB_ID=Ubuntu\nDISTRIB_RELEASE=22.04\nDISTRIB_CODENAME=jammy\nDISTRIB_DESCRIPTION=\"Ubuntu 22.04.2 LTS\"\n")[0]
-	if lsb["RecordType"] != "os_release" || lsb["Name"] != "Ubuntu" || lsb["ID"] != "ubuntu" || lsb["VersionID"] != "22.04" || lsb["PrettyName"] != "Ubuntu 22.04.2 LTS" {
+	if lsb["RecordType"] != "lsb_release" || lsb["Name"] != "Ubuntu" || lsb["ID"] != "ubuntu" || lsb["VersionID"] != "22.04" || lsb["PrettyName"] != "Ubuntu 22.04.2 LTS" {
 		t.Fatalf("lsb-release: %v", lsb)
 	}
 	if lsb["Fields"].(map[string]any)["DISTRIB_CODENAME"] != "jammy" {
 		t.Fatalf("lsb-release fields: %v", lsb)
 	}
-	if _, err := parseLSBRelease(strings.NewReader("just text\n"), record.NewWriter(&bytes.Buffer{})); err == nil {
+	if _, err := parseLSBRelease(strings.NewReader("just text\n"), record.NewWriter(&bytes.Buffer{}), true); err == nil {
 		t.Fatal("a file without DISTRIB_* keys accepted as lsb-release")
 	}
 
