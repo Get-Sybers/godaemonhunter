@@ -12,7 +12,9 @@ description: >
   service stream beside gounit, and gosyslog, gowtmp, gocron, goshell and
   gousers read the macOS shapes of their artefacts (system/install/wifi
   logs, utmpx, at tabs and periodic scripts, per-session histories,
-  master.passwd). The parameter is the STREAM — a byakugan model word
+  master.passwd). A UAC (Unix-like Artifacts Collector) collection — the
+  tar.gz/tar/zip holding a host's files under [root]/ — is hunted ON like
+  a disk image, through the same gomount. The parameter is the STREAM — a byakugan model word
   scoping the run to the parsers that feed that model; no arguments is
   every stream, the default. The same layered run goes over whichever
   source is named: a staged evidence tree, a disk image
@@ -42,11 +44,11 @@ layer2: [gojournal, goauditd, gowtmp, gosyslog, gounit, gocron, goshell, gotrash
 # GOWTMP_OUT_DIR, …) — each parser package's README (wtmp/README.md and
 # siblings) documents its block and its record shapes.
 env:
-  GODAEMONHUNTER_INPUT_DIR:     {required: false, default: /input,  desc: 'evidence tree, recursed read-only, shared by every sub-run'}
+  GODAEMONHUNTER_INPUT_DIR:     {required: false, default: /input,  desc: 'evidence tree, recursed read-only, shared by every sub-run; the disk images and UAC collections directly under it are hosts hunted ON (IMAGE)'}
   GODAEMONHUNTER_OUT_DIR:       {required: false, default: /output, desc: 'output root: knowledge/ (Layer 1) + one <subtool>/ tree per daemon parser'}
   GODAEMONHUNTER_KNOWLEDGE_DIR: {required: false, default: "",      desc: 'override the knowledge store location; empty = <OUT_DIR>/knowledge, built by Layer 1 in the same run'}
-  GODAEMONHUNTER_WORK_DIR:      {required: false, default: /work,   desc: 'scratch (writable tmpfs), shared by every sub-run; a disk image''s linux-core / macos-core surface is pulled here while its parsers run, so bind a disk-backed dir for large images'}
-  GODAEMONHUNTER_IMAGE:         {required: false, default: "",      desc: 'run ON one disk image: its path relative to INPUT_DIR (E01/Ex01, raw, VMDK, VHDX, VHD, QCOW2, VDI, DMG (.dmg), sparseimage (.sparseimage)). The baked-in gomount pulls the linux-core and macos-core surfaces (docs/linux §5.4; whichever the OS volume holds — a Mac''s APFS Data volume or HFS+ volume resolves like a Linux root) into WORK_DIR, the layered run goes over that as over a staged root tree, the knowledge store lands at <KNOWLEDGE_DIR>/<image>/ and the records under <OUT_DIR>/<subtool>/<image>/, nothing is exported. Empty = the loose tree itself plus every image directly under it; a sub-tool run reads <SUBTOOL>_IMAGE and writes <OUT_DIR>/<image>/'}
+  GODAEMONHUNTER_WORK_DIR:      {required: false, default: /work,   desc: 'scratch (writable tmpfs), shared by every sub-run; a disk image''s linux-core / macos-core surface is pulled here while its parsers run, and a gzip''d UAC collection is spooled here while gomount reads it (TMPDIR for the gomount run), so bind a disk-backed dir for large images and collections'}
+  GODAEMONHUNTER_IMAGE:         {required: false, default: "",      desc: 'run ON one disk image or UAC collection: its path relative to INPUT_DIR (E01/Ex01, raw, VMDK, VHDX, VHD, QCOW2, VDI, DMG (.dmg), sparseimage (.sparseimage); or the .tar.gz/.tar/.zip the Unix-like Artifacts Collector writes, whose [root]/ tree gomount reads as the root volume). The baked-in gomount pulls the linux-core and macos-core surfaces (docs/linux §5.4; whichever the OS volume holds — a Mac''s APFS Data volume or HFS+ volume resolves like a Linux root) into WORK_DIR, the layered run goes over that as over a staged root tree, the knowledge store lands at <KNOWLEDGE_DIR>/<image>/ and the records under <OUT_DIR>/<subtool>/<image>/, nothing is exported. Empty = the loose tree itself plus every image directly under it plus every archive there that gomount identify confirms as a collection (a zip or tar of anything else is skipped); a sub-tool run reads <SUBTOOL>_IMAGE and writes <OUT_DIR>/<image>/'}
   GODAEMONHUNTER_LIVE:          {required: false, default: "0", type: bool, desc: 'run ON the live host (livecollect): 1/true/yes/on copies the known artefact surface out of LIVE_ROOT into WORK_DIR — only the known trees, never /proc, /sys or other mounts; a per-file read failure is skipped, not fatal — and the layered run goes over that stage, the host folder named for the live host. Mutually exclusive with IMAGE; INPUT_DIR is unused. A sub-tool run reads <SUBTOOL>_LIVE'}
   GODAEMONHUNTER_LIVE_ROOT:     {required: false, default: /,       desc: 'the live root LIVE collects from; point at a read-only bind-mount of the host filesystem (a live-response container) or a staged root tree. The records'' Origin.Path is the real on-host path regardless of where this points'}
   GODAEMONHUNTER_LIVE_OS:       {required: false, default: "",      desc: 'the live-collection profile to use; empty = this host''s OS. Supported: linux, darwin (livecollect/profiles.json)'}

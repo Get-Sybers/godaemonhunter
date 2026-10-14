@@ -107,6 +107,44 @@ tree, a mounted root filesystem, or any directory laid out like one. A
 every record as `Origin`/`Snapshot`/`Residue` — rule-2 provenance comes from
 the stage, never from the parser.
 
+Two more kinds of host sit *beside* the loose tree and are hunted **on**
+(see below): the disk images directly under the input root
+(`GODAEMONHUNTER_IMAGE` names one), and the **UAC collections** — the
+`uac-<hostname>-<os>-<timestamp>.tar.gz`, `.tar` or `.zip` archives the
+[Unix-like Artifacts Collector](https://github.com/tclahr/uac) writes.
+
+## UAC collections
+
+A UAC collection holds the host's files under `[root]/` with their paths
+intact (`[root]/etc/passwd`, `[root]/var/log/auth.log`, …) and the
+collector's own output beside them (`uac.log`, `bodyfile/`,
+`hash_executables/`, `live_response/`, …). The baked-in gomount reads the
+archive as an image: `gomount identify` names it (a `collection` block
+from `uac.log` and a volume of fstype `uac`, the `[root]` tree, with the
+collector's output as a second volume), and `gomount materialise --set
+linux-core` pulls the daemon parsers' surface out of `[root]/` exactly as
+off an ext4 root — so a collection is simply another image item.
+`GODAEMONHUNTER_IMAGE` may name one; without `IMAGE`, every archive
+directly under the input root that identify confirms as a collection is
+hunted beside the disk images (a zip or tar of anything else is reported
+and skipped; UAC's `uac-<…>.log` acquisition-log sidecar is never an item).
+The knowledge store lands at `<KNOWLEDGE_DIR>/<archive>/`, the records under
+`<OUT_DIR>/<subtool>/<archive>/`, every record's `Origin` naming the archive
+and the `[root]` volume; the summary line lists the archives under
+`collections` (and, as hosts, under `images`). A gzip'd collection is
+spooled once while gomount reads it, under the work dir (`TMPDIR` is set to
+it for the gomount run), so bind a disk-backed `/work` for a large one.
+
+Only the host's files are read today. The `live_response/` snapshot a
+live-host collection also carries (ps, netstat/ss, systemctl, lsmod, who)
+is tracked as
+[godaemonhunter#8](https://github.com/Get-Sybers/godaemonhunter/issues/8),
+and the collection's `bodyfile/bodyfile.txt` as a full fs:stat timeline as
+[gomount#9](https://github.com/Get-Sybers/gomount/issues/9). Note that
+UAC's zip output dereferences symlinks (Info-ZIP without `-y`), so a zip
+collection lacks the `*.wants/` enablement links a tar collection keeps;
+prefer `--output-format tar` where you can choose.
+
 ## Env (the layered run)
 
 | Variable | Default | Meaning |
@@ -115,7 +153,7 @@ the stage, never from the parser.
 | `GODAEMONHUNTER_OUT_DIR` | `/output` | output root: `knowledge/` (Layer 1) + one `<subtool>/` tree per daemon parser |
 | `GODAEMONHUNTER_KNOWLEDGE_DIR` | *(empty)* | override the knowledge store location; empty = `<OUT_DIR>/knowledge`, built by Layer 1 in the same run |
 | `GODAEMONHUNTER_WORK_DIR` | `/work` | scratch (writable tmpfs), shared by every sub-run; a disk image's linux-core surface is pulled here while its parsers run — bind a disk-backed directory for large images |
-| `GODAEMONHUNTER_IMAGE` | *(empty)* | run **on a disk image**: its path relative to `INPUT_DIR` (E01/Ex01, raw, VMDK, VHDX, VHD, QCOW2, VDI, DMG (.dmg), sparseimage (.sparseimage)). The baked-in [gomount](../gomount) pulls the `linux-core` surface out of the root volume into `WORK_DIR`, the layered run goes over that as over a staged root tree, the knowledge store lands at `<KNOWLEDGE_DIR>/<image>/` and the records under `<OUT_DIR>/<subtool>/<image>/…`, the scratch goes — nothing is exported. Empty = the loose tree itself plus every image directly under it. A sub-tool run reads `<SUBTOOL>_IMAGE` and writes `<OUT_DIR>/<image>/…` |
+| `GODAEMONHUNTER_IMAGE` | *(empty)* | run **on a disk image or a UAC collection**: its path relative to `INPUT_DIR` (E01/Ex01, raw, VMDK, VHDX, VHD, QCOW2, VDI, DMG (.dmg), sparseimage (.sparseimage); or the `.tar.gz`/`.tar`/`.zip` the Unix-like Artifacts Collector writes, whose `[root]/` tree is the root volume). The baked-in [gomount](../gomount) pulls the `linux-core` surface out of the root volume into `WORK_DIR`, the layered run goes over that as over a staged root tree, the knowledge store lands at `<KNOWLEDGE_DIR>/<image>/` and the records under `<OUT_DIR>/<subtool>/<image>/…`, the scratch goes — nothing is exported. Empty = the loose tree itself plus every image directly under it plus every archive there that `gomount identify` confirms as a collection. A sub-tool run reads `<SUBTOOL>_IMAGE` and writes `<OUT_DIR>/<image>/…` |
 | `GODAEMONHUNTER_LIVE` | `0` | run **on the live host** (see [Running on a live system](#running-on-a-live-system)): `1/true/yes/on` stages the known artefact surface of the live root and runs the layered pipeline over it. Mutually exclusive with `GODAEMONHUNTER_IMAGE`; `INPUT_DIR` is unused |
 | `GODAEMONHUNTER_LIVE_ROOT` | `/` | the live root `LIVE` collects from — a read-only bind-mount of the host filesystem (a live-response container) or a staged root tree |
 | `GODAEMONHUNTER_LIVE_OS` | *(this host's OS)* | the live-collection profile: `linux` or `darwin` ([`livecollect/profiles.json`](livecollect/profiles.json)) |

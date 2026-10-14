@@ -77,6 +77,10 @@ func classify(rel string) string {
 	switch base {
 	case "os-release":
 		return "os_release"
+	case "lsb-release":
+		if dir == "etc" || dir == "." {
+			return "lsb_release"
+		}
 	case "hostname":
 		if dir == "etc" || dir == "." {
 			return "hostname"
@@ -143,6 +147,52 @@ func parseKVFile(rd io.Reader, family string, w *record.Writer) (int, error) {
 	}
 	if rec.Name == "" && rec.ID == "" && rec.Lang == "" && rec.Fields == nil {
 		return 0, fmt.Errorf("no KEY=value pairs: not an %s file", family)
+	}
+	if err := w.Write(rec); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
+// parseLSBRelease reads /etc/lsb-release — the LSB identity Debian and
+// Ubuntu keep beside os-release — into the same os_release record shape,
+// the DISTRIB_* keys lifted the way the os-release keys are (DISTRIB_ID →
+// Name and a lower-cased ID, DISTRIB_RELEASE → VersionID,
+// DISTRIB_DESCRIPTION → PrettyName) and all of them kept under Fields. It
+// is the fallback identity when the host's os-release is a dangling
+// symlink: every merged-usr distribution links /etc/os-release to
+// /usr/lib/os-release, and a collection that copied /etc alone (UAC's
+// offline profiles) carries the link's text and nothing it points at.
+func parseLSBRelease(rd io.Reader, w *record.Writer) (int, error) {
+	rec := &hostRecord{Fields: map[string]string{}}
+	rec.RecordType = "os_release"
+	sc := bufio.NewScanner(rd)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k, v = strings.TrimSpace(k), strings.Trim(strings.TrimSpace(v), `"'`)
+		rec.Fields[k] = v
+		switch k {
+		case "DISTRIB_ID":
+			rec.Name = v
+			rec.ID = strings.ToLower(v)
+		case "DISTRIB_RELEASE":
+			rec.VersionID = v
+		case "DISTRIB_DESCRIPTION":
+			rec.PrettyName = v
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return 0, err
+	}
+	if rec.Name == "" && rec.PrettyName == "" && rec.VersionID == "" {
+		return 0, fmt.Errorf("no DISTRIB_* keys: not an lsb-release file")
 	}
 	if err := w.Write(rec); err != nil {
 		return 0, err
@@ -329,6 +379,8 @@ func parseByFamily(rd io.Reader, family string, w *record.Writer) (int, error) {
 	switch family {
 	case "os_release", "locale":
 		return parseKVFile(rd, family, w)
+	case "lsb_release":
+		return parseLSBRelease(rd, w)
 	case "hostname", "machine_id", "timezone":
 		return parseOneLiner(rd, family, w)
 	case "localtime":
