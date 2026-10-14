@@ -263,7 +263,7 @@ func (s *stager) copyTree(rel string) {
 		s.copyRegular(rel, src, li)
 		return
 	}
-	filepath.WalkDir(src, func(p string, d fs.DirEntry, werr error) error {
+	_ = filepath.WalkDir(src, func(p string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			s.log("skip %s: %v", p, werr) // unreadable dir/file — skip, never fatal
 			return nil
@@ -345,16 +345,16 @@ func (s *stager) stageSymlink(rel, src string) {
 		s.writeText(rel, src, target)
 		return
 	}
-	real, err := filepath.EvalSymlinks(src)
+	resolved, err := filepath.EvalSymlinks(src)
 	if err != nil {
 		s.log("skip dangling %s -> %s", rel, target)
 		return
 	}
-	if s.realRoot != "" && !withinRoot(s.realRoot, real) {
-		s.log("skip %s: target %s escapes the live root", rel, real)
+	if s.realRoot != "" && !withinRoot(s.realRoot, resolved) {
+		s.log("skip %s: target %s escapes the live root", rel, resolved)
 		return
 	}
-	fi, err := os.Stat(real)
+	fi, err := os.Stat(resolved)
 	if err != nil {
 		s.log("skip %s: %v", rel, err)
 		return
@@ -362,7 +362,7 @@ func (s *stager) stageSymlink(rel, src string) {
 	if fi.IsDir() || !fi.Mode().IsRegular() {
 		return
 	}
-	s.copyRegular(rel, real, fi)
+	s.copyRegular(rel, resolved, fi)
 }
 
 // copyRegular copies one file into the stage, deduped by (dev,inode) so a file
@@ -410,7 +410,7 @@ func (s *stager) copyRegular(rel, src string, fi fs.FileInfo) {
 		s.skipped++
 		return
 	}
-	os.Chtimes(dst, time.Time{}, fi.ModTime())
+	_ = os.Chtimes(dst, time.Time{}, fi.ModTime())
 	s.row(rel, ino)
 	s.files++
 	s.bytes += n
@@ -448,13 +448,13 @@ type mrow struct {
 	Inode  uint64 `json:"inode,omitempty"`
 }
 
-func (s *stager) meta(r mrow) { s.enc.Encode(r) }
+func (s *stager) meta(r mrow) { _ = s.enc.Encode(r) }
 
 // row records a staged file's provenance: Path is its real on-host absolute
 // path (independent of where Root pointed), Staged the lookup key the runtime
 // joins on.
 func (s *stager) row(rel string, ino uint64) {
-	s.enc.Encode(mrow{Path: "/" + rel, Staged: rel, Inode: ino})
+	_ = s.enc.Encode(mrow{Path: "/" + rel, Staged: rel, Inode: ino})
 }
 
 const manifestName = "materialise.jsonl"

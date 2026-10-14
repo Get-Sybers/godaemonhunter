@@ -14,6 +14,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	lz4 "github.com/pierrec/lz4/v4"
 	"github.com/ulikunitz/xz"
+
 	"github.com/Get-Sybers/gopinfo/record"
 )
 

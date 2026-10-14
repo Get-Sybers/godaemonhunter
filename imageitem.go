@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Get-Sybers/gopinfo/diskimage"
 	"io"
 	"io/fs"
 	"os"
@@ -28,6 +27,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/Get-Sybers/gopinfo/diskimage"
 )
 
 // macSystemSets is what the second pass pulls off a Mac's sealed System
