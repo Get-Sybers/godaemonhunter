@@ -155,17 +155,25 @@ func parseKVFile(rd io.Reader, family string, w *record.Writer) (int, error) {
 }
 
 // parseLSBRelease reads /etc/lsb-release — the LSB identity Debian and
-// Ubuntu keep beside os-release — into the same os_release record shape,
-// the DISTRIB_* keys lifted the way the os-release keys are (DISTRIB_ID →
+// Ubuntu keep beside os-release — into the os_release record shape, the
+// DISTRIB_* keys lifted the way the os-release keys are (DISTRIB_ID →
 // Name and a lower-cased ID, DISTRIB_RELEASE → VersionID,
-// DISTRIB_DESCRIPTION → PrettyName) and all of them kept under Fields. It
-// is the fallback identity when the host's os-release is a dangling
-// symlink: every merged-usr distribution links /etc/os-release to
-// /usr/lib/os-release, and a collection that copied /etc alone (UAC's
-// offline profiles) carries the link's text and nothing it points at.
-func parseLSBRelease(rd io.Reader, w *record.Writer) (int, error) {
+// DISTRIB_DESCRIPTION → PrettyName) and all of them kept under Fields.
+// With asOSRelease the row IS the os_release row: the fallback identity
+// when the host's os-release is a dangling symlink — every merged-usr
+// distribution links /etc/os-release to /usr/lib/os-release, and a
+// collection that copied /etc alone (UAC's offline profiles) carries the
+// link's text and nothing it points at. Otherwise the row is recorded as
+// lsb_release: the knowledge store keeps the first os_release row with a
+// PrettyName, in path order, and etc_lsb-release sorts before
+// etc_os-release — the LSB description would have outranked PRETTY_NAME on
+// every Ubuntu host.
+func parseLSBRelease(rd io.Reader, w *record.Writer, asOSRelease bool) (int, error) {
 	rec := &hostRecord{Fields: map[string]string{}}
-	rec.RecordType = "os_release"
+	rec.RecordType = "lsb_release"
+	if asOSRelease {
+		rec.RecordType = "os_release"
+	}
 	sc := bufio.NewScanner(rd)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -380,7 +388,7 @@ func parseByFamily(rd io.Reader, family string, w *record.Writer) (int, error) {
 	case "os_release", "locale":
 		return parseKVFile(rd, family, w)
 	case "lsb_release":
-		return parseLSBRelease(rd, w)
+		return parseLSBRelease(rd, w, false)
 	case "hostname", "machine_id", "timezone":
 		return parseOneLiner(rd, family, w)
 	case "localtime":
@@ -391,6 +399,43 @@ func parseByFamily(rd io.Reader, family string, w *record.Writer) (int, error) {
 		return parseCrypttab(rd, w)
 	}
 	return 0, fmt.Errorf("unknown family %q", family)
+}
+
+// parseStaged parses one file of a staged root tree, the family from its
+// path and, for etc/lsb-release, the precedence rule: it is the os_release
+// row only when no os-release in the tree carries an identity (the link
+// text of a dangling symlink, or no os-release at all); beside a readable
+// one it is recorded as lsb_release. An empty root is a lone file.
+func parseStaged(rd io.Reader, family, root string, w *record.Writer) (int, error) {
+	if family == "lsb_release" && root != "" {
+		return parseLSBRelease(rd, w, !osIdentityStaged(root))
+	}
+	return parseByFamily(rd, family, w)
+}
+
+// osIdentityStaged reports whether etc/os-release or usr/lib/os-release
+// under root carries a NAME or PRETTY_NAME — a staged link text does not.
+func osIdentityStaged(root string) bool {
+	for _, rel := range []string{"etc/os-release", "usr/lib/os-release"} {
+		f, err := os.Open(filepath.Join(root, rel))
+		if err != nil {
+			continue
+		}
+		found := false
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			k, v, ok := strings.Cut(strings.TrimSpace(sc.Text()), "=")
+			if ok && (k == "NAME" || k == "PRETTY_NAME") && strings.Trim(strings.TrimSpace(v), `"'`) != "" {
+				found = true
+				break
+			}
+		}
+		f.Close()
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- batch binding ---------------------------------------------------------
@@ -409,7 +454,7 @@ var Tool = batch.Tool{
 			return 0, err
 		}
 		defer f.Close()
-		return parseByFamily(f, classify(filepath.ToSlash(rel)), w)
+		return parseStaged(f, classify(filepath.ToSlash(rel)), cfg.InputDir, w)
 	},
 }
 
@@ -431,7 +476,7 @@ func Main(version, contractYML string) {
 	}
 	w := record.NewWriter(os.Stdout)
 	failed := 0
-	one := func(path, rel string) {
+	one := func(path, rel, root string) {
 		family := classify(rel)
 		if family == "" {
 			if !*quiet {
@@ -447,7 +492,7 @@ func Main(version, contractYML string) {
 				s.SourceModified = tstamp.ISO8601(st.ModTime())
 			}
 			w.SetStamp(s)
-			_, err = parseByFamily(f, family, w)
+			_, err = parseStaged(f, family, root, w)
 			f.Close()
 		}
 		if err != nil {
@@ -458,7 +503,7 @@ func Main(version, contractYML string) {
 		}
 	}
 	if *file != "" {
-		one(*file, *file)
+		one(*file, *file, "")
 	} else {
 		items, err := discover.Files(*dir, func(rel string, d fs.DirEntry) bool { return classify(rel) != "" })
 		if err != nil {
@@ -470,7 +515,7 @@ func Main(version, contractYML string) {
 			if rerr != nil {
 				rel = it
 			}
-			one(it, filepath.ToSlash(rel))
+			one(it, filepath.ToSlash(rel), *dir)
 		}
 	}
 	if err := w.Flush(); err != nil {

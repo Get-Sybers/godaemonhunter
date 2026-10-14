@@ -22,18 +22,26 @@ func gomountStub(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	stub := filepath.Join(dir, "gomount")
-	// identify: a uac-*.tar.gz|.tar|.zip is a UAC collection (the [root]
-	// volume), any other archive is unreadable (exit 1, as the real binary
-	// reports a zip of anything else), a disk image is a plain Linux root.
-	// materialise: stage a minimal linux-core surface and record TMPDIR,
-	// the spool dir the hunt hands gomount.
+	// identify, answering as gomount 0.3.0 does: a uac-*.tar.gz|.tar|.zip
+	// is a UAC collection (the [root] volume); any other archive is a zip
+	// or tar of something else — exit 0, no volumes; a broken-* archive
+	// cannot be read (exit 1 with the reason on stderr); probe-tmpdir.tar
+	// reports the TMPDIR it was handed as its volume source; a disk image
+	// is a plain Linux root. materialise: stage a minimal linux-core
+	// surface and record TMPDIR, the spool dir the hunt hands gomount.
+	// Every call is appended to $GOMOUNT_STUB_LOG when set.
 	script := `#!/bin/sh
+[ -n "${GOMOUNT_STUB_LOG:-}" ] && echo "$1 $2" >> "$GOMOUNT_STUB_LOG"
 if [ "$1" = identify ]; then
   case "$2" in
     */uac-*.tar.gz|*/uac-*.tgz|*/uac-*.tar|*/uac-*.zip)
       echo '{"image":{"format":"gzip","size":1},"collection":{"tool":"uac","version":"3.4.0","hostname":"web01"},"volumes":[{"volume":1,"source":"[root]","fstype":"uac","os":"linux"},{"volume":2,"source":"uac","fstype":"uac-meta"}]}' ;;
+    */probe-tmpdir.tar)
+      echo "{\"image\":{\"format\":\"tar\",\"size\":1},\"volumes\":[{\"volume\":1,\"source\":\"${TMPDIR:-unset}\",\"fstype\":\"probe\"}]}" ;;
+    */broken-*)
+      echo "gomount: uac: spool: open /nowhere/gomount-uac-1.tar: no such file or directory" >&2; exit 1 ;;
     *.zip|*.tar|*.tar.gz|*.tgz)
-      echo "gomount: no recognised filesystem among 1 volumes" >&2; exit 1 ;;
+      echo '{"image":{"format":"zip","size":1},"partitions":null,"volumes":null,"snapshots":[]}' ;;
     *)
       echo '{"image":{"format":"raw","size":1},"volumes":[{"volume":1,"source":"p1","fstype":"ext4","os":"linux (debian)"}]}' ;;
   esac
@@ -157,7 +165,7 @@ func TestImageSelectionRejectsParts(t *testing.T) {
 func TestHuntDiscoversCollections(t *testing.T) {
 	stub := gomountStub(t)
 	in, out, work := t.TempDir(), t.TempDir(), t.TempDir()
-	for _, name := range []string{"uac-web01-linux-20261014113903.tar.gz", "uac-web01-linux-20261014113903.log", "other.zip", "srv.vmdk"} {
+	for _, name := range []string{"uac-web01-linux-20261014113903.tar.gz", "uac-web01-linux-20261014113903.log", "other.zip", "broken-case.tar.gz", "srv.vmdk"} {
 		if err := os.WriteFile(filepath.Join(in, name), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -188,8 +196,10 @@ func TestHuntDiscoversCollections(t *testing.T) {
 			t.Errorf("no gosyslog records under %s", host)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(out, "knowledge", "other.zip")); err == nil {
-		t.Error("a zip of something else was hunted as a collection")
+	for _, name := range []string{"other.zip", "broken-case.tar.gz"} {
+		if _, err := os.Stat(filepath.Join(out, "knowledge", name)); err == nil {
+			t.Errorf("%s was hunted as a collection", name)
+		}
 	}
 	if entries, _ := os.ReadDir(work); len(entries) != 0 {
 		t.Fatalf("scratch left behind: %v", entries)
@@ -299,5 +309,92 @@ func TestImageSelectionErrors(t *testing.T) {
 	}), &buf)
 	if code != 2 || !strings.Contains(buf.String(), "config_error") {
 		t.Fatalf("missing image: exit %d: %s", code, buf.String())
+	}
+}
+
+// TestIdentifyRunsOnTheWorkDir: every gomount run gets TMPDIR = the work
+// dir — identify included, since it spools a gzip'd collection exactly as
+// materialise does and the container's /tmp is a small tmpfs or, in a
+// FROM scratch image, absent. The stub reports the TMPDIR it saw as the
+// volume source.
+func TestIdentifyRunsOnTheWorkDir(t *testing.T) {
+	stub := gomountStub(t)
+	in, work := t.TempDir(), filepath.Join(t.TempDir(), "work")
+	probe := filepath.Join(in, "probe-tmpdir.tar")
+	if err := os.WriteFile(probe, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	vols, err := identifyVolumes(env(map[string]string{"GOMOUNT_BIN": stub}), work, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vols) != 1 || vols[0].Source != work {
+		t.Fatalf("identify ran with TMPDIR %q, want the work dir %q", vols[0].Source, work)
+	}
+	// a candidate gomount cannot read: its first stderr line rides the error
+	broken := filepath.Join(in, "broken-case.tar.gz")
+	if err := os.WriteFile(broken, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := identifyVolumes(env(map[string]string{"GOMOUNT_BIN": stub}), work, broken); err == nil || !strings.Contains(err.Error(), "uac: spool") {
+		t.Fatalf("broken archive: err = %v, want gomount's reason", err)
+	}
+	// discovery makes the work dir first, so the spool has somewhere to
+	// land; the probe (no uac volume) and the broken archive are skipped
+	if err := os.WriteFile(filepath.Join(in, "uac-web01-linux-20261014113903.tar.gz"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoverCollections(env(map[string]string{"GOMOUNT_BIN": stub}), in, work); len(got) != 1 || filepath.Base(got[0]) != "uac-web01-linux-20261014113903.tar.gz" {
+		t.Fatalf("discoverCollections = %v", got)
+	}
+	if st, err := os.Stat(work); err != nil || !st.IsDir() {
+		t.Errorf("work dir not made before identify: %v", err)
+	}
+}
+
+// TestNamedCollectionIsNeverReIdentified: a collection named by IMAGE is
+// one host's root tree, never a Mac Data/System pair, so after materialise
+// no second identify spools the archive again.
+func TestNamedCollectionIsNeverReIdentified(t *testing.T) {
+	stub := gomountStub(t)
+	in, out, work := t.TempDir(), t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(in, "uac-web01-linux-20261014113903.tar.gz"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "calls.log")
+	t.Setenv("GOMOUNT_STUB_LOG", log)
+	var buf bytes.Buffer
+	code := run(nil, env(map[string]string{
+		"GOMOUNT_BIN":              stub,
+		"GODAEMONHUNTER_INPUT_DIR": in, "GODAEMONHUNTER_OUT_DIR": out, "GODAEMONHUNTER_WORK_DIR": work,
+		"GODAEMONHUNTER_IMAGE": "uac-web01-linux-20261014113903.tar.gz",
+	}), &buf)
+	if code == 2 {
+		t.Fatalf("exit %d: %s", code, buf.String())
+	}
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(calls), "identify") {
+		t.Errorf("a named collection was identified:\n%s", calls)
+	}
+	if !strings.Contains(string(calls), "materialise") {
+		t.Errorf("no materialise call:\n%s", calls)
+	}
+	// a disk image still gets the Mac second-pass identify
+	if err := os.WriteFile(filepath.Join(in, "srv.vmdk"), []byte("KDMV"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(log)
+	buf.Reset()
+	run(nil, env(map[string]string{
+		"GOMOUNT_BIN":              stub,
+		"GODAEMONHUNTER_INPUT_DIR": in, "GODAEMONHUNTER_OUT_DIR": t.TempDir(), "GODAEMONHUNTER_WORK_DIR": work,
+		"GODAEMONHUNTER_IMAGE": "srv.vmdk",
+	}), &buf)
+	calls, _ = os.ReadFile(log)
+	if !strings.Contains(string(calls), "identify") {
+		t.Errorf("a disk image skipped the Mac second-pass identify:\n%s", calls)
 	}
 }

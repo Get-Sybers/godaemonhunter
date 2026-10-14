@@ -24,19 +24,28 @@ All notable changes are documented here, following
   directly under the input root that `gomount identify` confirms as a
   collection (a volume of fstype `uac`) is hunted beside the disk images,
   a zip or tar of anything else reported and skipped. The summary line
-  lists them under `collections` (and, as hosts, under `images`). The
-  gomount run gets `TMPDIR` = the work dir, so the spool of a gzip'd
-  collection lands on the disk-backed `/work`, never the container's tmpfs.
+  lists them under `collections` (and, as hosts, under `images`). Every
+  gomount run — `identify` as much as `materialise` — gets `TMPDIR` = the
+  work dir, so the spool of a gzip'd collection lands on the disk-backed
+  `/work`, never the container's tmpfs (nor a `FROM scratch` image's
+  missing `/tmp`); a candidate gomount cannot read is skipped with
+  gomount's own reason on stderr, and a named collection gets no Mac
+  second-pass identify (one host's root tree is never a Data/System pair).
   An archive is a candidate by name (`.tar.gz`, `.tgz`, `.tar`, `.zip`; the
   acquisition-log sidecar is never one) and an item by content. The
   `live_response/` snapshot of a live-host collection is not read yet (#8).
-- **gohost reads `etc/lsb-release`** into the same `os_release` row
+- **gohost reads `etc/lsb-release`** into the `os_release` row shape
   (`DISTRIB_ID` → `Name`/`ID`, `DISTRIB_RELEASE` → `VersionID`,
   `DISTRIB_DESCRIPTION` → `PrettyName`, every key under `Fields`): the
-  fallback identity when `etc/os-release` is a symlink into `/usr/lib`
-  whose target the evidence lacks — a UAC collection copies `/etc` alone, so
+  fallback identity when the staged tree has no os-release identity —
+  `etc/os-release` a symlink into `/usr/lib` whose target the evidence
+  lacks, staged as its link text (a UAC collection copies `/etc` alone, so
   on Ubuntu/Debian the knowledge store's `OS` was empty where the image
-  path had it.
+  path had it). Beside a readable os-release the row is recorded as
+  `lsb_release` instead: the knowledge store keeps the first `os_release`
+  row in path order, and `etc_lsb-release` sorts before `etc_os-release`,
+  so the LSB description would otherwise outrank `PRETTY_NAME` on every
+  Ubuntu host.
 - The conformance gate of the get-sybers standard (DX_DFIR
   `docs/reference/build-and-test.md`): `make conform` (gofmt, vet, build,
   shuffled tests with coverage, `go mod tidy -diff`, a macOS cross-compile, a
