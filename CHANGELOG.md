@@ -12,7 +12,7 @@ All notable changes are documented here, following
   shuffled tests with coverage, `go mod tidy -diff`, a macOS cross-compile, a
   `go:generate` drift check and `scripts/structlint.sh`), `make lint`
   (golangci-lint v2, `.golangci.yml`) and `make vuln` (govulncheck), run by the
-  `CI` workflow on every push and pull request with `all_green` as the one
+  `CI` workflow on pull requests and `main` with `all_green` as the one
   required status check.
 - Repository hygiene: `.editorconfig`, `.gitattributes`, `.shellcheckrc`,
   Dependabot (actions and Go modules, weekly, grouped), `CODEOWNERS`, a
