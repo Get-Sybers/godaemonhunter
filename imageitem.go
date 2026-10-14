@@ -13,6 +13,16 @@
 // under INPUT_DIR (an EWF set's first segment, a VMDK descriptor or
 // monolithic extent — never a -flat/-sNNN extent or an .E02… segment) plus,
 // for the hunt, the loose tree itself.
+//
+// A UAC collection is a host too. The tar.gz, tar or zip UAC writes
+// (github.com/tclahr/uac) holds the host's files under [root]/ with their
+// paths intact, and gomount reads that tree as the
+// archive's root volume (`gomount identify` names it: a volume of fstype
+// `uac`). So a collection is simply another image item: IMAGE may name one,
+// and without IMAGE every archive directly under INPUT_DIR that identify
+// confirms as a collection is hunted beside the disk images — the same
+// materialise, the same layered run, the records under <OUT_DIR>/<subtool>/
+// <archive>/. A zip or tar of anything else is left alone.
 package main
 
 import (
@@ -25,6 +35,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -80,6 +92,9 @@ func runMaterialise(getenv func(string) string, out, image string, sets []string
 	cmd := exec.Command(diskimage.GomountPath(getenv), args...)
 	cmd.Stderr = os.Stderr
 	cmd.Stdout = nil // its summary line is not ours to print
+	// a gzip'd collection is spooled under TMPDIR while gomount reads it:
+	// the disk-backed work dir, never the container's tmpfs
+	cmd.Env = append(os.Environ(), "TMPDIR="+filepath.Dir(out))
 	if err := cmd.Run(); err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && ee.ExitCode() == 1 {
@@ -91,11 +106,94 @@ func runMaterialise(getenv func(string) string, out, image string, sets []string
 }
 
 // identifiedVolume is the slice of gomount identify's volume rows this
-// file reads: the --volume index and the OS guess.
+// file reads: the --volume index, the filesystem type and the OS guess.
 type identifiedVolume struct {
 	Volume int    `json:"volume"`
 	Source string `json:"source"`
+	FSType string `json:"fstype"`
 	OS     string `json:"os"`
+}
+
+// collectionFSType is what gomount identify calls a UAC collection's root
+// volume (the host's files under [root]/).
+const collectionFSType = "uac"
+
+// archiveExt matches the containers a collection comes in — what UAC writes
+// with `--output-format tar|zip`: a gzip'd or plain tar, or a zip. A name
+// makes a CANDIDATE; gomount identify decides by content, since a zip of
+// anything else wears the same extension. UAC's acquisition-log sidecar
+// (uac-<host>-<os>-<ts>.log) never matches.
+var archiveExt = regexp.MustCompile(`(?i)\.(tar\.gz|tgz|tar|zip)$`)
+
+// isArchiveItem reports whether path names an archive that may be a collection.
+func isArchiveItem(path string) bool { return archiveExt.MatchString(path) }
+
+// discoverArchives lists the archive candidates directly under dir, sorted.
+func discoverArchives(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.Type().IsRegular() && isArchiveItem(e.Name()) {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// selectedItems resolves the IMAGE setting: a named collection archive is
+// taken as it is (gomount confirms it when the hunt opens it), anything
+// else goes through the shared disk-image selection — one named image, or
+// every image directly under the input tree.
+func selectedItems(in, selected string) ([]string, error) {
+	if selected == "" || !isArchiveItem(selected) {
+		return diskimage.SelectedImages(in, selected)
+	}
+	p := selected
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(in, filepath.FromSlash(selected))
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return nil, fmt.Errorf("IMAGE %s: %w", selected, err)
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("IMAGE %s: not a file", selected)
+	}
+	return []string{p}, nil
+}
+
+// discoverCollections lists the UAC collections directly under in: every
+// archive candidate by name (discoverArchives) that gomount identify
+// confirms by content — a volume of fstype `uac`. A zip or tar of anything
+// else is not an item; an archive identify cannot read is reported and
+// skipped.
+func discoverCollections(getenv func(string) string, in string) []string {
+	var out []string
+	for _, p := range discoverArchives(in) {
+		vols, err := identifyVolumes(getenv, p)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "godaemonhunter: %s: not readable as a collection (%v) — skipped\n", filepath.Base(p), err)
+			continue
+		}
+		if isCollection(vols) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// isCollection reports whether an identified stack is a UAC collection.
+func isCollection(vols []identifiedVolume) bool {
+	for _, v := range vols {
+		if v.FSType == collectionFSType {
+			return true
+		}
+	}
+	return false
 }
 
 // identifyVolumes asks gomount for the image's resolved stack.

@@ -52,6 +52,17 @@ func TestOsReleaseAndOneLiners(t *testing.T) {
 	if r := parse(t, "locale", "LANG=en_US.UTF-8\n")[0]; r["Lang"] != "en_US.UTF-8" {
 		t.Fatalf("locale: %v", r)
 	}
+	// lsb-release: the same os_release row, the DISTRIB_* keys lifted
+	lsb := parse(t, "lsb_release", "DISTRIB_ID=Ubuntu\nDISTRIB_RELEASE=22.04\nDISTRIB_CODENAME=jammy\nDISTRIB_DESCRIPTION=\"Ubuntu 22.04.2 LTS\"\n")[0]
+	if lsb["RecordType"] != "os_release" || lsb["Name"] != "Ubuntu" || lsb["ID"] != "ubuntu" || lsb["VersionID"] != "22.04" || lsb["PrettyName"] != "Ubuntu 22.04.2 LTS" {
+		t.Fatalf("lsb-release: %v", lsb)
+	}
+	if lsb["Fields"].(map[string]any)["DISTRIB_CODENAME"] != "jammy" {
+		t.Fatalf("lsb-release fields: %v", lsb)
+	}
+	if _, err := parseLSBRelease(strings.NewReader("just text\n"), record.NewWriter(&bytes.Buffer{})); err == nil {
+		t.Fatal("a file without DISTRIB_* keys accepted as lsb-release")
+	}
 
 	var buf bytes.Buffer
 	w := record.NewWriter(&buf)
@@ -115,6 +126,7 @@ func TestClassify(t *testing.T) {
 	cases := map[string]string{
 		"etc/os-release":      "os_release",
 		"usr/lib/os-release":  "os_release",
+		"etc/lsb-release":     "lsb_release",
 		"etc/hostname":        "hostname",
 		"etc/machine-id":      "machine_id",
 		"etc/timezone":        "timezone",

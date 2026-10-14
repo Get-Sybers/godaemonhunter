@@ -32,6 +32,11 @@
 // as over a staged root tree, the knowledge store lands at
 // <OUT_DIR>/knowledge/<image>/ and the records under
 // <OUT_DIR>/<subtool>/<image>/, the scratch goes. Nothing is exported.
+// A UAC collection (the tar.gz, tar or zip UAC — github.com/tclahr/uac —
+// writes) is the same item: gomount reads its [root]/ tree as
+// the root volume, so IMAGE may name one and every archive under the
+// input tree that `gomount identify` confirms as a collection is hunted
+// beside the images.
 //
 // And a live system is a host too (livecollect): GODAEMONHUNTER_LIVE (or a
 // sub-tool's <SUBTOOL>_LIVE) runs the parsers ON the running host. Instead of
@@ -238,8 +243,9 @@ type huntSummary struct {
 	Records      int             `json:"records"`
 	KnowledgeDir string          `json:"knowledge_dir"`
 	Streams      []string        `json:"streams"`
-	Images       []string        `json:"images,omitempty"` // the disk images run on, by item name
-	Live         string          `json:"live,omitempty"`   // the live host run on, by item name
+	Images       []string        `json:"images,omitempty"`      // the disk images and collections run on, by item name
+	Collections  []string        `json:"collections,omitempty"` // the UAC collections among them
+	Live         string          `json:"live,omitempty"`        // the live host run on, by item name
 	Subtools     []batch.Summary `json:"subtools"`
 	Failures     []batch.Failure `json:"failures,omitempty"` // an image that could not be read
 	Exit         int             `json:"exit"`
@@ -259,7 +265,7 @@ func runSubOnImage(s sub, selected string, getenv func(string) string, stdout io
 		return def
 	}
 	in, out, work := get("INPUT_DIR", "/input"), get("OUT_DIR", "/output"), get("WORK_DIR", "/work")
-	images, err := diskimage.SelectedImages(in, selected)
+	images, err := selectedItems(in, selected)
 	if err != nil {
 		return configErrorSummary(s.name, err, stdout)
 	}
@@ -452,7 +458,7 @@ func runHunt(getenv func(string) string, stdout io.Writer, words []string) int {
 		passes = append(passes, pass{in: res.Dir, host: host, scratch: res.Dir})
 	} else {
 		selected := get("IMAGE", "")
-		images, err := diskimage.SelectedImages(in, selected)
+		images, err := selectedItems(in, selected)
 		if err != nil {
 			sum.Status, sum.Exit = "config_error", 2
 			sum.Failures = []batch.Failure{{Item: selected, Error: err.Error()}}
@@ -461,6 +467,8 @@ func runHunt(getenv func(string) string, stdout io.Writer, words []string) int {
 		}
 		if selected == "" {
 			passes = append(passes, pass{in: in})
+			// the UAC collections beside the disk images (imageitem.go)
+			images = append(images, discoverCollections(getenv, in)...)
 		}
 		for _, img := range images {
 			host := diskimage.ImageItemName(in, img)
@@ -473,6 +481,9 @@ func runHunt(getenv func(string) string, stdout io.Writer, words []string) int {
 				continue
 			}
 			sum.Images = append(sum.Images, host)
+			if isArchiveItem(img) {
+				sum.Collections = append(sum.Collections, host)
+			}
 			passes = append(passes, pass{in: scratch, host: host, scratch: scratch})
 		}
 	}

@@ -52,7 +52,12 @@ is joined onto every record as `Origin`/`Snapshot`/`Residue`.
 
 `<OUT_DIR>/<item>/gohost.jsonl`, one folder per input file; `RecordType`
 is `os_release`, `hostname`, `machine_id`, `timezone`, `locale`,
-`fstab_entry` or `crypttab_entry`.
+`fstab_entry` or `crypttab_entry`. An `etc/lsb-release` (Debian, Ubuntu)
+yields an `os_release` row too, its `DISTRIB_*` keys lifted the same way
+(`DISTRIB_ID` → `Name` and a lower-cased `ID`, `DISTRIB_RELEASE` →
+`VersionID`, `DISTRIB_DESCRIPTION` → `PrettyName`): the fallback identity
+when `etc/os-release` is a symlink into `/usr/lib` whose target the
+evidence does not hold (a UAC collection that copied `/etc` alone).
 
 ## Exit codes
 

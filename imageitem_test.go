@@ -22,7 +22,23 @@ func gomountStub(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	stub := filepath.Join(dir, "gomount")
+	// identify: a uac-*.tar.gz|.tar|.zip is a UAC collection (the [root]
+	// volume), any other archive is unreadable (exit 1, as the real binary
+	// reports a zip of anything else), a disk image is a plain Linux root.
+	// materialise: stage a minimal linux-core surface and record TMPDIR,
+	// the spool dir the hunt hands gomount.
 	script := `#!/bin/sh
+if [ "$1" = identify ]; then
+  case "$2" in
+    */uac-*.tar.gz|*/uac-*.tgz|*/uac-*.tar|*/uac-*.zip)
+      echo '{"image":{"format":"gzip","size":1},"collection":{"tool":"uac","version":"3.4.0","hostname":"web01"},"volumes":[{"volume":1,"source":"[root]","fstype":"uac","os":"linux"},{"volume":2,"source":"uac","fstype":"uac-meta"}]}' ;;
+    *.zip|*.tar|*.tar.gz|*.tgz)
+      echo "gomount: no recognised filesystem among 1 volumes" >&2; exit 1 ;;
+    *)
+      echo '{"image":{"format":"raw","size":1},"volumes":[{"volume":1,"source":"p1","fstype":"ext4","os":"linux (debian)"}]}' ;;
+  esac
+  exit 0
+fi
 out=""
 while [ $# -gt 0 ]; do
   case "$1" in --out) out="$2"; shift ;; esac
@@ -30,6 +46,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$out" ] || exit 2
 mkdir -p "$out/etc" "$out/var/log"
+printf '%s\n' "${TMPDIR:-unset}" > "$out/.spool-dir"
 printf 'web01\n' > "$out/etc/hostname"
 printf 'PRETTY_NAME="Debian GNU/Linux 13 (trixie)"\nID=debian\n' > "$out/etc/os-release"
 printf 'root:x:0:0:root:/root:/bin/bash\nalice:x:1000:1000::/home/alice:/bin/bash\n' > "$out/etc/passwd"
@@ -131,6 +148,145 @@ func TestImageSelectionRejectsParts(t *testing.T) {
 		}
 	}
 	_ = stub
+}
+
+// TestHuntDiscoversCollections: without IMAGE, every archive directly under
+// the input tree that gomount identify confirms as a UAC collection is a
+// host beside the disk images; a zip of anything else is skipped, and the
+// acquisition-log sidecar is never an item.
+func TestHuntDiscoversCollections(t *testing.T) {
+	stub := gomountStub(t)
+	in, out, work := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, name := range []string{"uac-web01-linux-20261014113903.tar.gz", "uac-web01-linux-20261014113903.log", "other.zip", "srv.vmdk"} {
+		if err := os.WriteFile(filepath.Join(in, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var buf bytes.Buffer
+	code := run(nil, env(map[string]string{
+		"GOMOUNT_BIN":              stub,
+		"GODAEMONHUNTER_INPUT_DIR": in, "GODAEMONHUNTER_OUT_DIR": out, "GODAEMONHUNTER_WORK_DIR": work,
+	}), &buf)
+	var sum huntSummary
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &sum); err != nil {
+		t.Fatalf("summary: %v: %s", err, buf.String())
+	}
+	if code == 2 {
+		t.Fatalf("exit %d: %s", code, buf.String())
+	}
+	if strings.Join(sum.Images, " ") != "srv.vmdk uac-web01-linux-20261014113903.tar.gz" {
+		t.Fatalf("images = %v", sum.Images)
+	}
+	if strings.Join(sum.Collections, " ") != "uac-web01-linux-20261014113903.tar.gz" {
+		t.Fatalf("collections = %v", sum.Collections)
+	}
+	for _, host := range sum.Images {
+		if st, err := os.Stat(filepath.Join(out, "knowledge", host)); err != nil || !st.IsDir() {
+			t.Errorf("knowledge/%s/ missing: %v", host, err)
+		}
+		if matches, _ := filepath.Glob(filepath.Join(out, "gosyslog", host, "*", "gosyslog.jsonl")); len(matches) == 0 {
+			t.Errorf("no gosyslog records under %s", host)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(out, "knowledge", "other.zip")); err == nil {
+		t.Error("a zip of something else was hunted as a collection")
+	}
+	if entries, _ := os.ReadDir(work); len(entries) != 0 {
+		t.Fatalf("scratch left behind: %v", entries)
+	}
+}
+
+// TestCollectionNamedAndSpooledOnWork: IMAGE may name a collection outright
+// (no identify round-trip), and gomount's spool of a gzip'd archive lands
+// on the disk-backed work dir, never the container's tmpfs.
+func TestCollectionNamedAndSpooledOnWork(t *testing.T) {
+	stub := gomountStub(t)
+	in, out, work := t.TempDir(), t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(in, "case.zip"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	code := run([]string{"gosyslog"}, env(map[string]string{
+		"GOMOUNT_BIN":        stub,
+		"GOSYSLOG_INPUT_DIR": in, "GOSYSLOG_OUT_DIR": out, "GOSYSLOG_WORK_DIR": work, "GOSYSLOG_IMAGE": "case.zip",
+	}), &buf)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, buf.String())
+	}
+	if matches, _ := filepath.Glob(filepath.Join(out, "case.zip", "*", "gosyslog.jsonl")); len(matches) == 0 {
+		t.Fatalf("no records under <out>/<collection>/: %s", buf.String())
+	}
+	// the stub recorded the TMPDIR it was handed in the scratch (removed
+	// afterwards), so prove it through a hunt that keeps the stage: the
+	// spool dir is the work dir
+	var hunt bytes.Buffer
+	code = run(nil, env(map[string]string{
+		"GOMOUNT_BIN":              stub,
+		"GODAEMONHUNTER_INPUT_DIR": in, "GODAEMONHUNTER_OUT_DIR": t.TempDir(), "GODAEMONHUNTER_WORK_DIR": work,
+		"GODAEMONHUNTER_IMAGE": "case.zip", "GODAEMONHUNTER_LOG_LEVEL": "debug",
+	}), &hunt)
+	if code == 2 {
+		t.Fatalf("hunt exit %d: %s", code, hunt.String())
+	}
+	var sum huntSummary
+	if err := json.Unmarshal(bytes.TrimSpace(hunt.Bytes()), &sum); err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Collections) != 1 || sum.Collections[0] != "case.zip" {
+		t.Errorf("collections = %v", sum.Collections)
+	}
+}
+
+func TestSpoolDirIsTheWorkDir(t *testing.T) {
+	stub := gomountStub(t)
+	in, work := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(in, "uac-x.tar.gz"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scratch, err := materialiseImage(env(map[string]string{"GOMOUNT_BIN": stub}), work, filepath.Join(in, "uac-x.tar.gz"), imageSets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(scratch)
+	b, err := os.ReadFile(filepath.Join(scratch, ".spool-dir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(b)); got != work {
+		t.Errorf("gomount ran with TMPDIR=%q, want the work dir %q", got, work)
+	}
+}
+
+// TestArchiveCandidatesAndSelection: an archive is a candidate by name
+// (never the acquisition-log sidecar), selectable outright by IMAGE, and
+// invisible to the disk-image discovery.
+func TestArchiveCandidatesAndSelection(t *testing.T) {
+	in := t.TempDir()
+	for _, name := range []string{"uac-b.zip", "uac-a.tar.gz", "uac-a.log", "disk.vmdk", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(in, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(in, "folder.zip"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := discoverArchives(in)
+	if len(got) != 2 || filepath.Base(got[0]) != "uac-a.tar.gz" || filepath.Base(got[1]) != "uac-b.zip" {
+		t.Errorf("discoverArchives = %v", got)
+	}
+	for _, name := range []string{"uac-a.tar.gz", "uac-b.zip", "disk.vmdk"} {
+		if items, err := selectedItems(in, name); err != nil || len(items) != 1 {
+			t.Errorf("selectedItems(%q) = %v, %v", name, items, err)
+		}
+	}
+	for _, name := range []string{"uac-a.log", "folder.zip", "missing.tar.gz"} {
+		if _, err := selectedItems(in, name); err == nil {
+			t.Errorf("selectedItems(%q) accepted a non-item", name)
+		}
+	}
+	if imgs := diskimage.DiscoverImages(in); len(imgs) != 1 || filepath.Base(imgs[0]) != "disk.vmdk" {
+		t.Errorf("DiscoverImages = %v (archives are not images)", imgs)
+	}
 }
 
 func TestImageSelectionErrors(t *testing.T) {
