@@ -47,7 +47,7 @@ godaemonhunter --version | --print-contract
 | `process` | goauditd, goshell, gojournal, gosyslog |
 | `service` | gounit, golaunchd, gocron, gojournal, gosyslog |
 | `flow` | goauditd |
-| `file` | gotrash |
+| `file` | gotrash, gofsevents |
 | `module` | goctl |
 
 Model words nothing here feeds yet (`registry`, `thread`, …) are rejected
@@ -79,12 +79,14 @@ shapes:
 | [`gotrash`](trash/README.md) | XDG Trash |
 | [`goctl`](ctl/README.md) | sysctl, module policy, ld.so preload/conf |
 | [`golaunchd`](launchd/README.md) | macOS launchd jobs (LaunchDaemons/LaunchAgents in every domain) and the disabled-overrides tables |
+| [`gofsevents`](fsevents/README.md) | macOS fseventsd `/.fseventsd/` filesystem-change logs (DLS), one record per change |
 
 **A Mac is the same run.** Point it at a macOS disk image (APFS or HFS+ —
 gomount resolves the Data volume) or a staged Mac tree and the layered
 pipeline is unchanged: gomachost and gomacusers build the knowledge store
 from the property lists, golaunchd feeds the `service` stream beside
-gounit, and the Linux parsers read the macOS shapes of their own
+gounit, gofsevents reads the `/.fseventsd/` change log for the `file`
+stream, and the Linux parsers read the macOS shapes of their own
 artefacts — gosyslog `system.log`/`install.log`/`wifi.log` (bzip2
 rotations included), gowtmp the 628-byte `utmpx`, gocron `var/at/tabs`,
 `var/at/jobs` and the `etc/periodic` scripts, goshell the per-session
