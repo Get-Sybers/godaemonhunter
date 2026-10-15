@@ -76,6 +76,7 @@ import (
 	"github.com/Get-Sybers/godaemonhunter/auditd"
 	"github.com/Get-Sybers/godaemonhunter/cron"
 	"github.com/Get-Sybers/godaemonhunter/ctl"
+	"github.com/Get-Sybers/godaemonhunter/fsevents"
 	"github.com/Get-Sybers/godaemonhunter/host"
 	"github.com/Get-Sybers/godaemonhunter/journal"
 	"github.com/Get-Sybers/godaemonhunter/launchd"
@@ -128,6 +129,7 @@ var subs = []sub{
 	{"gotrash", 2, trash.Tool, trash.Main},
 	{"goctl", 2, ctl.Tool, ctl.Main},
 	{"golaunchd", 2, launchd.Tool, launchd.Main},
+	{"gofsevents", 2, fsevents.Tool, fsevents.Main},
 }
 
 // streams is the calling vocabulary (decision 17): each accepted word IS a
@@ -141,7 +143,7 @@ var streams = map[string][]string{
 	"process":        {"goauditd", "goshell", "gojournal", "gosyslog"},
 	"service":        {"gounit", "golaunchd", "gocron", "gojournal", "gosyslog"},
 	"flow":           {"goauditd"},
-	"file":           {"gotrash"},
+	"file":           {"gotrash", "gofsevents"},
 	"module":         {"goctl"},
 }
 

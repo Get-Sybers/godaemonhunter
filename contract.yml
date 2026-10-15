@@ -29,7 +29,7 @@ description: >
 # Model words nothing here feeds yet (registry, thread, …) are rejected.
 streams: [authentication, user_session, process, service, flow, file, module]
 
-subtools: [hunt, gohost, gousers, gonetwork, gomachost, gomacusers, gojournal, goauditd, gowtmp, gosyslog, gounit, gocron, goshell, gotrash, goctl, golaunchd]
+subtools: [hunt, gohost, gousers, gonetwork, gomachost, gomacusers, gojournal, goauditd, gowtmp, gosyslog, gounit, gocron, goshell, gotrash, goctl, golaunchd, gofsevents]
 
 # The layers, for a driver that runs the parsers one container at a time
 # over a staged host tree (DX_DFIR's loose-host path): layer1 builds the
@@ -37,7 +37,7 @@ subtools: [hunt, gohost, gousers, gonetwork, gomachost, gomacusers, gojournal, g
 # registry hunt runs — a driver reads it from here rather than carrying a
 # copy; the binary's tests hold the two in step.
 layer1: [gohost, gousers, gonetwork, gomachost, gomacusers]
-layer2: [gojournal, goauditd, gowtmp, gosyslog, gounit, gocron, goshell, gotrash, goctl, golaunchd]
+layer2: [gojournal, goauditd, gowtmp, gosyslog, gounit, gocron, goshell, gotrash, goctl, golaunchd, gofsevents]
 
 # hunt's own block. A parser sub-tool run (`godaemonhunter gowtmp`) reads
 # that tool's canonical <SUBTOOL>_* block instead (GOWTMP_INPUT_DIR,
