@@ -100,9 +100,12 @@ var syscallNamesX8664 = map[string]string{
 var headRe = regexp.MustCompile(`^(?:node=(\S+) )?type=(\S+) msg=audit\((\d+)\.(\d{1,3}):(\d+)\):\s*(.*)$`)
 
 // parseKV tokenises an audit record body: key=value pairs where value is a
-// 'single-quoted' or "double-quoted" string or a bare token.
-func parseKV(s string) map[string]string {
-	out := map[string]string{}
+// 'single-quoted' or "double-quoted" string or a bare token. quoted[k] marks a
+// value that was quoted — auditd hex-encodes ONLY bare values, so a quoted
+// value is always a literal string and never a hex-decode candidate.
+func parseKV(s string) (out map[string]string, quoted map[string]bool) {
+	out = map[string]string{}
+	quoted = map[string]bool{}
 	i := 0
 	for i < len(s) {
 		for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
@@ -127,6 +130,7 @@ func parseKV(s string) map[string]string {
 		switch s[i] {
 		case '"', '\'':
 			q := s[i]
+			quoted[key] = true
 			end := strings.IndexByte(s[i+1:], q)
 			if end < 0 {
 				val = s[i+1:]
@@ -147,7 +151,7 @@ func parseKV(s string) map[string]string {
 		}
 		out[key] = val
 	}
-	return out
+	return out, quoted
 }
 
 // unhex decodes an audit hex-encoded value (unquoted, even length, all hex);
@@ -164,7 +168,11 @@ func unhex(s string) (string, bool) {
 	return strings.ReplaceAll(string(b), "\x00", " "), true
 }
 
-// maybeHex decodes when the value looks hex-encoded, else returns verbatim.
+// maybeHex decodes a value that looks hex-encoded, else returns it verbatim.
+// Call it only via decodeField, which restricts it to BARE values of the
+// hex-encodable string fields — auditd hex-encodes only bare string values, so
+// this never sees a number (ids/bitmasks are verbatim by field name) nor a
+// quoted literal that happens to be all-hex (e.g. an execve arg "1234").
 func maybeHex(s string) string {
 	if isHexish(s) {
 		if d, ok := unhex(s); ok {
@@ -174,29 +182,29 @@ func maybeHex(s string) string {
 	return s
 }
 
+// decodeField decodes a hex-encodable string field. A quoted value is always a
+// literal (auditd never hex-encodes a quoted value); only a BARE value is a
+// hex-encode candidate. This is the signal — not a value heuristic — that lets
+// an all-digit hex string like `6361742061` ("cat a") decode while a quoted
+// numeric literal like "1234" stays verbatim.
+func decodeField(v string, wasQuoted bool) string {
+	if wasQuoted {
+		return v
+	}
+	return maybeHex(v)
+}
+
 func isHexish(s string) bool {
 	if len(s) < 4 || len(s)%2 != 0 {
 		return false
 	}
-	letter := false
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		switch {
-		case c >= '0' && c <= '9':
-		case c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
-			letter = true
-		default:
+		if !(c >= '0' && c <= '9' || c >= 'A' && c <= 'F' || c >= 'a' && c <= 'f') {
 			return false
 		}
 	}
-	// auditd hex-encodes STRINGS (paths, argv, commands); their bytes carry '/',
-	// letters and the like, so the encoding always holds an a-f digit. A value
-	// that is all decimal digits is a number auditd never hex-encodes — uid,
-	// auid, ses, pid, a plain-decimal execve arg — and must pass through
-	// verbatim. Without this guard hex.DecodeString("4294967295") turns an unset
-	// auid into binary (`B��r�`); see the auditd/README contract,
-	// "numeric uids verbatim".
-	return letter
+	return true
 }
 
 // extracted are the SYSCALL keys lifted into named fields; the rest go to
@@ -221,8 +229,9 @@ var hexEncodable = map[string]bool{
 	"old-disk": true, "new-disk": true, "old-chardev": true, "new-chardev": true,
 }
 
-// apply folds one record's kv into the event.
-func (e *auditEvent) apply(rtype string, kv map[string]string) {
+// apply folds one record's kv into the event. quoted marks the values parseKV
+// read as quoted literals, so only bare hex-encoded values are decoded.
+func (e *auditEvent) apply(rtype string, kv map[string]string, quoted map[string]bool) {
 	switch rtype {
 	case "SYSCALL":
 		e.Arch = kv["arch"]
@@ -234,9 +243,9 @@ func (e *auditEvent) apply(rtype string, kv map[string]string) {
 		e.PID, e.PPID = kv["pid"], kv["ppid"]
 		e.UID, e.AUID, e.EUID, e.GID = kv["uid"], kv["auid"], kv["euid"], kv["gid"]
 		e.SES, e.TTY = kv["ses"], kv["tty"]
-		e.Comm, e.Exe = maybeHex(kv["comm"]), kv["exe"]
+		e.Comm, e.Exe = decodeField(kv["comm"], quoted["comm"]), decodeField(kv["exe"], quoted["exe"])
 		if k := kv["key"]; k != "(null)" {
-			e.Key = maybeHex(k)
+			e.Key = decodeField(k, quoted["key"])
 		}
 		for k, v := range kv {
 			if !extracted[k] {
@@ -249,32 +258,34 @@ func (e *auditEvent) apply(rtype string, kv map[string]string) {
 			argc = n
 		}
 		for i := 0; ; i++ {
-			v, ok := kv["a"+strconv.Itoa(i)]
+			ai := "a" + strconv.Itoa(i)
+			v, ok := kv[ai]
 			if !ok {
 				if argc == 0 || i >= argc {
 					break
 				}
 				continue
 			}
-			e.Argv = append(e.Argv, maybeHex(v))
+			e.Argv = append(e.Argv, decodeField(v, quoted[ai]))
 		}
 	case "CWD":
-		e.Cwd = maybeHex(kv["cwd"])
+		e.Cwd = decodeField(kv["cwd"], quoted["cwd"])
 	case "PATH":
 		e.Paths = append(e.Paths, pathEntry{
-			Name: maybeHex(kv["name"]), Nametype: kv["nametype"],
+			Name: decodeField(kv["name"], quoted["name"]), Nametype: kv["nametype"],
 			Inode: kv["inode"], Mode: kv["mode"],
 		})
 	case "PROCTITLE":
-		e.Proctitle = maybeHex(kv["proctitle"])
+		e.Proctitle = decodeField(kv["proctitle"], quoted["proctitle"])
 	case "EOE":
 	default:
-		// Decode only the known hex-encoded STRING fields; everything else is
-		// verbatim. A blanket maybeHex here corrupts hex-looking numbers and
-		// bitmasks (e.g. BPRM_FCAPS capability masks pe/pp/old_pe/old_pp).
+		// Decode only the known hex-encoded STRING fields, and only the bare
+		// ones; everything else is verbatim. A blanket maybeHex here corrupts
+		// hex-looking numbers and bitmasks (e.g. BPRM_FCAPS capability masks
+		// pe/pp/old_pe/old_pp).
 		for k, v := range kv {
 			if hexEncodable[k] {
-				v = maybeHex(v)
+				v = decodeField(v, quoted[k])
 			}
 			e.field(k, v)
 		}
@@ -356,7 +367,8 @@ func parseAudit(rd io.Reader, ks *knowledge.Store, w *record.Writer, warnf func(
 		if i := strings.IndexAny(body, "\x1d\x1e"); i >= 0 {
 			body = body[:i]
 		}
-		cur.apply(rtype, parseKV(body))
+		kv, quoted := parseKV(body)
+		cur.apply(rtype, kv, quoted)
 	}
 	if err := sc.Err(); err != nil {
 		return emitted, err

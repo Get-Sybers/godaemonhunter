@@ -92,9 +92,36 @@ func TestGarbageRejected(t *testing.T) {
 }
 
 func TestParseKVQuoting(t *testing.T) {
-	kv := parseKV(`a="x y" b='p q' c=bare d=`)
+	kv, quoted := parseKV(`a="x y" b='p q' c=bare d=`)
 	if kv["a"] != "x y" || kv["b"] != "p q" || kv["c"] != "bare" || kv["d"] != "" {
 		t.Fatalf("kv: %v", kv)
+	}
+	if !quoted["a"] || !quoted["b"] || quoted["c"] {
+		t.Fatalf("quoted tracking: %v", quoted)
+	}
+}
+
+// Quote-aware decoding: a BARE hex value whose hex is all decimal digits
+// (e.g. proctitle "cat a" = 6361742061, argv "cat" = 636174) still decodes,
+// while a QUOTED literal that happens to be all hex-digits (an execve arg
+// "1234") stays verbatim. auditd hex-encodes only bare values, so the quote is
+// the signal — not a value heuristic that would mis-handle one or the other.
+func TestQuoteAwareHexDecode(t *testing.T) {
+	const in = "type=SYSCALL msg=audit(7.1:1): arch=c000003e syscall=59 success=yes exit=0 pid=5 comm=\"cat\" key=(null)\n" +
+		"type=EXECVE msg=audit(7.1:1): argc=2 a0=636174 a1=\"1234\"\n" +
+		"type=PROCTITLE msg=audit(7.1:1): proctitle=6361742061\n" +
+		"type=EOE msg=audit(7.1:1):\n"
+	recs := parse(t, in)
+	if len(recs) != 1 {
+		t.Fatalf("events: %d", len(recs))
+	}
+	e := recs[0]
+	if e["Proctitle"] != "cat a" {
+		t.Fatalf("all-digit-hex proctitle should decode: %q", e["Proctitle"])
+	}
+	argv := e["Argv"].([]any)
+	if len(argv) != 2 || argv[0] != "cat" || argv[1] != "1234" {
+		t.Fatalf("bare-hex a0 should decode, quoted a1 should stay literal: %v", argv)
 	}
 }
 
