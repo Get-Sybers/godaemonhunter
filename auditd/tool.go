@@ -178,13 +178,25 @@ func isHexish(s string) bool {
 	if len(s) < 4 || len(s)%2 != 0 {
 		return false
 	}
+	letter := false
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !(c >= '0' && c <= '9' || c >= 'A' && c <= 'F' || c >= 'a' && c <= 'f') {
+		switch {
+		case c >= '0' && c <= '9':
+		case c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+			letter = true
+		default:
 			return false
 		}
 	}
-	return true
+	// auditd hex-encodes STRINGS (paths, argv, commands); their bytes carry '/',
+	// letters and the like, so the encoding always holds an a-f digit. A value
+	// that is all decimal digits is a number auditd never hex-encodes — uid,
+	// auid, ses, pid, a plain-decimal execve arg — and must pass through
+	// verbatim. Without this guard hex.DecodeString("4294967295") turns an unset
+	// auid into binary (`B��r�`); see the auditd/README contract,
+	// "numeric uids verbatim".
+	return letter
 }
 
 // extracted are the SYSCALL keys lifted into named fields; the rest go to
@@ -194,6 +206,19 @@ var extracted = map[string]bool{
 	"pid": true, "ppid": true, "uid": true, "auid": true, "euid": true,
 	"gid": true, "ses": true, "tty": true, "comm": true, "exe": true,
 	"key": true,
+}
+
+// hexEncodable names the auditd STRING fields that are hex-encoded when they
+// hold a space or control byte; only these are decoded in the generic record
+// path. Numeric and BITMASK fields are hex-looking but auditd never encodes
+// them, so they must stay verbatim — above all the capability masks in
+// BPRM_FCAPS (pe/pp/fp/fe/fi, old_pe/old_pp, frootid), which decode to binary.
+// SYSCALL/EXECVE/CWD/PATH/PROCTITLE decode their own hex fields in their cases.
+var hexEncodable = map[string]bool{
+	"proctitle": true, "cmd": true, "exe": true, "comm": true, "cwd": true,
+	"name": true, "path": true, "dir": true, "acct": true, "data": true,
+	"key": true, "obj": true, "vm": true, "device": true,
+	"old-disk": true, "new-disk": true, "old-chardev": true, "new-chardev": true,
 }
 
 // apply folds one record's kv into the event.
@@ -244,8 +269,14 @@ func (e *auditEvent) apply(rtype string, kv map[string]string) {
 		e.Proctitle = maybeHex(kv["proctitle"])
 	case "EOE":
 	default:
+		// Decode only the known hex-encoded STRING fields; everything else is
+		// verbatim. A blanket maybeHex here corrupts hex-looking numbers and
+		// bitmasks (e.g. BPRM_FCAPS capability masks pe/pp/old_pe/old_pp).
 		for k, v := range kv {
-			e.field(k, maybeHex(v))
+			if hexEncodable[k] {
+				v = maybeHex(v)
+			}
+			e.field(k, v)
 		}
 	}
 }
@@ -314,7 +345,18 @@ func parseAudit(rd io.Reader, ks *knowledge.Store, w *record.Writer, warnf func(
 			cur.TimeKind = "event"
 		}
 		cur.Types = append(cur.Types, rtype)
-		cur.apply(rtype, parseKV(m[6]))
+		// ENRICHED log_format appends auditd's interpreted fields after an ASCII
+		// GS (0x1d) separator (records themselves are RS 0x1e). Interpretation is
+		// not this tool's job — numeric ids stay verbatim, resolution is the
+		// knowledge store's (decision 14) and byakugan's — and only the raw
+		// record tokenises cleanly, so drop the trailer. Left in, the first
+		// interpreted key keeps the 0x1d (`\x1dUID`) and the audit-rule `key`
+		// swallows it (`(null)\x1dARCH=...`).
+		body := m[6]
+		if i := strings.IndexAny(body, "\x1d\x1e"); i >= 0 {
+			body = body[:i]
+		}
+		cur.apply(rtype, parseKV(body))
 	}
 	if err := sc.Err(); err != nil {
 		return emitted, err

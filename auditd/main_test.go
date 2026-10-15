@@ -138,3 +138,90 @@ func TestKnowledgeResolution(t *testing.T) {
 		t.Fatalf("resolution (native beside resolved): %v", e)
 	}
 }
+
+// ENRICHED log_format (auditd log_format=ENRICHED) appends interpreted fields
+// after an ASCII GS (0x1d). The parser must drop that trailer, keep numeric ids
+// verbatim, and never leak a 0x1d into a field key or the audit-rule Key.
+func TestEnrichedFormat(t *testing.T) {
+	const enriched = "type=SERVICE_STOP msg=audit(1683112130.213:11932): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=unconfined msg='unit=scoringbot comm=\"systemd\" exe=\"/usr/lib/systemd/systemd\" res=success'\x1dUID=\"root\" AUID=\"unset\"\n" +
+		"type=SYSCALL msg=audit(1683112130.100:11000): arch=c000003e syscall=59 success=yes exit=0 a0=7ffd614ce6f0 items=1 ppid=1 pid=1234 auid=4294967295 uid=0 gid=0 ses=4294967295 comm=\"systemd\" exe=\"/usr/lib/systemd/systemd\" subj=unconfined key=(null)\x1dARCH=x86_64 SYSCALL=execve AUID=\"unset\" UID=\"root\" GID=\"root\"\n" +
+		"type=EOE msg=audit(1683112130.100:11000):\n"
+	recs := parse(t, enriched)
+	if len(recs) != 2 {
+		t.Fatalf("events: %d", len(recs))
+	}
+
+	stop := recs[0]
+	sf := stop["Fields"].(map[string]any)
+	if sf["auid"] != "4294967295" || sf["ses"] != "4294967295" {
+		t.Fatalf("SERVICE_STOP numeric ids not verbatim (hex-decoded?): %v", sf)
+	}
+	for k := range sf {
+		if strings.ContainsRune(k, '\x1d') {
+			t.Fatalf("field key carries a raw 0x1d: %q", k)
+		}
+		if k == "UID" || k == "AUID" {
+			t.Fatalf("enriched interpreted trailer leaked into Fields: %q", k)
+		}
+	}
+
+	sys := recs[1]
+	if sys["Key"] != nil && sys["Key"] != "" {
+		t.Fatalf("audit-rule Key swallowed the enriched trailer: %v", sys["Key"])
+	}
+	if sys["AUID"] != "4294967295" {
+		t.Fatalf("SYSCALL auid not verbatim: %v", sys["AUID"])
+	}
+	yf, _ := sys["Fields"].(map[string]any)
+	for k := range yf {
+		if strings.ContainsRune(k, '\x1d') {
+			t.Fatalf("SYSCALL field key carries a raw 0x1d: %q", k)
+		}
+	}
+	// a pointer value (all-hex, with letters) in a SYSCALL stays verbatim —
+	// SYSCALL never hex-decodes its non-extracted fields.
+	if yf["a0"] != "7ffd614ce6f0" {
+		t.Fatalf("a0 not verbatim: %v", yf["a0"])
+	}
+}
+
+// auditd never hex-encodes numeric ids; a plain decimal that happens to be
+// all hex-digits and even length must pass through verbatim, not be decoded
+// into binary (the isHexish decimal false-positive).
+func TestNumericNotHexDecoded(t *testing.T) {
+	recs := parse(t, "type=SERVICE_STOP msg=audit(100.1:7): pid=1234 uid=0 auid=4294967295 ses=4294967295\n")
+	f := recs[0]["Fields"].(map[string]any)
+	if f["pid"] != "1234" || f["auid"] != "4294967295" || f["ses"] != "4294967295" {
+		t.Fatalf("numeric fields corrupted: %v", f)
+	}
+}
+
+// The generic record path decodes only known hex-encoded string fields. A
+// BPRM_FCAPS capability mask (pe/pp/old_pe/old_pp) is hex-with-letters but is a
+// bitmask auditd never encodes, so it stays verbatim; a USER_CMD cmd is a
+// genuinely hex-encoded string and still decodes.
+func TestDefaultCaseFieldScoping(t *testing.T) {
+	const in = "type=SYSCALL msg=audit(5.1:9): arch=c000003e syscall=59 success=yes exit=0 pid=5 auid=1000 uid=0 comm=\"sudo\" key=(null)\n" +
+		"type=BPRM_FCAPS msg=audit(5.1:9): fver=0 fp=0000000000000000 fe=0 old_pp=0000003fffffffff old_pe=0000003fffffffff pp=0000003fffffffff pe=0000003fffffffff\n" +
+		"type=EOE msg=audit(5.1:9):\n" +
+		"type=USER_CMD msg=audit(6.1:10): pid=7 uid=0 auid=1000 cmd=6C73202D6C61 terminal=pts0 res=success\n"
+	recs := parse(t, in)
+	if len(recs) != 2 {
+		t.Fatalf("events: %d", len(recs))
+	}
+	cf := recs[0]["Fields"].(map[string]any)
+	for _, k := range []string{"pe", "pp", "old_pe", "old_pp"} {
+		if cf[k] != "0000003fffffffff" {
+			t.Fatalf("capability mask %s not verbatim: %q", k, cf[k])
+		}
+	}
+	for k, v := range cf {
+		if s, ok := v.(string); ok && strings.ContainsRune(s, '�') {
+			t.Fatalf("capability field %s decoded to binary: %q", k, s)
+		}
+	}
+	uf := recs[1]["Fields"].(map[string]any)
+	if uf["cmd"] != "ls -la" { // 6C73202D6C61 -> "ls -la"
+		t.Fatalf("USER_CMD cmd not decoded: %q", uf["cmd"])
+	}
+}
