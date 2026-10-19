@@ -66,7 +66,7 @@ func materialiseImage(getenv func(string) string, work, image string, sets []str
 	}
 	// --manifest: the origin record of every staged file (rule 2), which
 	// the batch runtime joins onto the records as Origin
-	if err := runMaterialise(getenv, scratch, image, sets, 0); err != nil {
+	if err := runMaterialise(getenv, scratch, image, sets, 0, true); err != nil {
 		os.RemoveAll(scratch)
 		return "", err
 	}
@@ -84,9 +84,18 @@ func materialiseImage(getenv func(string) string, work, image string, sets []str
 
 // runMaterialise pulls sets from the image (volume 0 = gomount's choice)
 // into out with a manifest. gomount's exit 1 (nothing matched) is not an
-// error.
-func runMaterialise(getenv func(string) string, out, image string, sets []string, volume int) error {
+// error. hash adds --hash, streaming a sha256 over the container bytes as
+// delivered and recording it as image_sha256 on the manifest's metadata row
+// (the shared stamp joins it onto every record as Origin.ImageSHA256) — one
+// extra sequential read of the image, paid once on the primary pull. The Mac
+// System-volume second pass passes hash=false: image_sha256 is image-level, so
+// the System rows inherit it as the metadata default rather than re-read the
+// whole image to hash it twice.
+func runMaterialise(getenv func(string) string, out, image string, sets []string, volume int, hash bool) error {
 	args := []string{"materialise", "--out", out, "--manifest"}
+	if hash {
+		args = append(args, "--hash")
+	}
 	if volume > 0 {
 		args = append(args, "--volume", strconv.Itoa(volume))
 	}
@@ -271,7 +280,7 @@ func materialiseMacSystem(getenv func(string) string, work, scratch, image strin
 		return err
 	}
 	defer os.RemoveAll(side)
-	if err := runMaterialise(getenv, side, image, macSystemSets, system); err != nil {
+	if err := runMaterialise(getenv, side, image, macSystemSets, system, false); err != nil {
 		return err
 	}
 	return mergeStage(side, scratch)

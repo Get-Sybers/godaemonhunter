@@ -114,9 +114,9 @@ serial (`DiskSerial`) and disk GUID or MBR signature (`DiskID`), and the
 volume's `VolumeGUID`, `PartGUID` and `PartOffset` — each `omitempty`, stamped
 only where the image format and partitioning provide them (so a resolver
 downstream can key each row to one evidence asset). The host's own machine id
-rides `Host.MachineID`. (`ImageSHA256` is part of the same shape but gomount
-writes it only under `materialise --hash`, a full-container read the hunt does
-not request.)
+rides `Host.MachineID`, and `ImageSHA256` carries the acquisition bytes'
+sha256 — the hunt pulls the image with gomount's `materialise --hash`, one
+extra sequential read of the container, paid once on the primary pull.
 
 Two more kinds of host sit *beside* the loose tree and are hunted **on**
 (see below): the disk images directly under the input root

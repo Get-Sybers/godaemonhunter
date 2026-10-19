@@ -26,9 +26,11 @@ All notable changes are documented here, following
   (raw/dd/QCOW2 carry no `DiskSerial`; an unpartitioned volume no `PartGUID`;
   a UAC collection's synthetic `[root]` no disk or volume GUID; macOS has no
   machine-id source). `Origin.ImageSHA256` (the acquisition bytes' sha256) is
-  part of the same contract but gomount writes it only under `materialise
-  --hash`, a full-container read the hunt does not request, so it is not
-  stamped today.
+  part of the same contract and is stamped too: the hunt now pulls the image
+  with gomount's `materialise --hash`, so every record carries it. That is one
+  extra sequential read of the container per hunt, paid once on the primary
+  pull — the Mac System-volume second pass inherits the digest as the
+  manifest's metadata default rather than re-hashing the image a second time.
 
 ## [0.3.0] - 2026-10-14
 
