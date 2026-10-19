@@ -7,6 +7,22 @@ All notable changes are documented here, following
 ## [Unreleased]
 
 ### Changed
+- **Flat Layer-2 lane output — one record file per (sub-tool, evidence asset).**
+  The hunt sweep (disk images and UAC collections), the single-sub-tool
+  image/live runs and the plain batch run now write
+  `<OUT_DIR>/<subtool>/<asset-id>.jsonl` instead of the runtime's
+  `<subtool>/<image>/<item>/<subtool>.jsonl` tree: no per-artefact directory and
+  no duplicated `<subtool>.jsonl` leaf. The asset id is the strongest gomount
+  stage-manifest identifier (`disk_serial` → `volume_guid` → `image_sha256`),
+  falling back to the item name (loose/live: the host dir name); the per-artefact
+  source path is each row's `Origin.Path`, so the collapse loses no provenance.
+  Two acquisitions of one disk share an asset id and **merge by appending** within
+  a run (byakugan dedupes rows at load); a re-run rebuilds. The **Layer-1
+  knowledge store** (`<OUT_DIR>/knowledge/…`) is an internal enrichment tree and
+  keeps its per-item layout. A non-JSONL (`<SUBTOOL>_FORMAT=csv`) run is not
+  flattened — those per-item/per-table files are preserved verbatim. gopinfo is
+  unchanged: it writes its per-item tree into a private temp dir the engine then
+  merges (`flatten.go`, `assetid.go`).
 - **Evidence-asset identity on every record.** Bumped the shared
   [`gopinfo`](https://github.com/Get-Sybers/gopinfo) runtime to **v0.3.0**,
   which widens the record `Origin` with the frozen gopinfo↔gomount

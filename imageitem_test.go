@@ -4,7 +4,7 @@ package main
 // (GOMOUNT_BIN) stands in for the decoder and stages a minimal linux-core
 // surface where a materialised root volume would put it; the layered run
 // then treats it as the host, builds the knowledge store under
-// <KNOWLEDGE_DIR>/<image>/, writes records under <OUT_DIR>/<subtool>/<image>/,
+// <KNOWLEDGE_DIR>/<image>/, writes Layer-2 records flat at <OUT_DIR>/<subtool>/<asset-id>.jsonl,
 // and leaves no scratch behind.
 
 import (
@@ -94,10 +94,9 @@ func TestHuntRunsOnImage(t *testing.T) {
 	if st, err := os.Stat(filepath.Join(out, "knowledge", "srv.vmdk")); err != nil || !st.IsDir() {
 		t.Fatalf("knowledge/<image>/ missing: %v", err)
 	}
-	// layer-2 output is per image too; gosyslog saw auth.log
-	matches, _ := filepath.Glob(filepath.Join(out, "gosyslog", "srv.vmdk", "*", "gosyslog.jsonl"))
-	if len(matches) == 0 {
-		t.Fatalf("no gosyslog records under the image host; summary: %s", buf.String())
+	// layer-2 output is flat per asset; gosyslog saw auth.log
+	if _, err := os.Stat(filepath.Join(out, "gosyslog", "srv.vmdk.jsonl")); err != nil {
+		t.Fatalf("no gosyslog flat record for the image; summary: %s", buf.String())
 	}
 	if entries, _ := os.ReadDir(work); len(entries) != 0 {
 		t.Fatalf("scratch left behind: %v", entries)
@@ -123,9 +122,8 @@ func TestSubtoolRunsOnImage(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, buf.String())
 	}
-	matches, _ := filepath.Glob(filepath.Join(out, "srv.E01", "*", "gosyslog.jsonl"))
-	if len(matches) == 0 {
-		t.Fatalf("no records under <out>/<image>/: %s", buf.String())
+	if _, err := os.Stat(filepath.Join(out, "srv.E01.jsonl")); err != nil {
+		t.Fatalf("no flat record at <out>/<asset-id>.jsonl: %s", buf.String())
 	}
 	if entries, _ := os.ReadDir(work); len(entries) != 0 {
 		t.Fatalf("scratch left behind: %v", entries)
@@ -192,8 +190,8 @@ func TestHuntDiscoversCollections(t *testing.T) {
 		if st, err := os.Stat(filepath.Join(out, "knowledge", host)); err != nil || !st.IsDir() {
 			t.Errorf("knowledge/%s/ missing: %v", host, err)
 		}
-		if matches, _ := filepath.Glob(filepath.Join(out, "gosyslog", host, "*", "gosyslog.jsonl")); len(matches) == 0 {
-			t.Errorf("no gosyslog records under %s", host)
+		if _, err := os.Stat(filepath.Join(out, "gosyslog", host+".jsonl")); err != nil {
+			t.Errorf("no gosyslog flat record for %s", host)
 		}
 	}
 	for _, name := range []string{"other.zip", "broken-case.tar.gz"} {
@@ -223,8 +221,8 @@ func TestCollectionNamedAndSpooledOnWork(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, buf.String())
 	}
-	if matches, _ := filepath.Glob(filepath.Join(out, "case.zip", "*", "gosyslog.jsonl")); len(matches) == 0 {
-		t.Fatalf("no records under <out>/<collection>/: %s", buf.String())
+	if _, err := os.Stat(filepath.Join(out, "case.zip.jsonl")); err != nil {
+		t.Fatalf("no flat record at <out>/<asset-id>.jsonl: %s", buf.String())
 	}
 	// the stub recorded the TMPDIR it was handed in the scratch (removed
 	// afterwards), so prove it through a hunt that keeps the stage: the

@@ -97,7 +97,7 @@ func TestHuntRunsLive(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(out, "knowledge", sum.Live)); err != nil {
 		t.Fatalf("knowledge/<live>/ missing: %v", err)
 	}
-	rec := readOne(t, filepath.Join(out, "gosyslog", sum.Live), "gosyslog.jsonl")
+	rec := readFlat(t, filepath.Join(out, "gosyslog"))
 	if rec["EventTime"] != "2026-01-10T21:14:02.000000Z" {
 		t.Errorf("host zone not applied: %v", rec["EventTime"])
 	}
@@ -140,7 +140,7 @@ func TestHuntRunsLiveDarwin(t *testing.T) {
 	if host["RecordType"] != "os_release" || host["Name"] != "macOS" {
 		t.Errorf("gomachost did not read SystemVersion.plist: %v", host)
 	}
-	job := readOne(t, filepath.Join(out, "golaunchd", sum.Live), "golaunchd.jsonl")
+	job := readFlat(t, filepath.Join(out, "golaunchd"))
 	if job["Label"] != "com.evil.daemon" {
 		t.Errorf("golaunchd did not read the LaunchDaemon: %v", job)
 	}
@@ -161,9 +161,10 @@ func TestSubtoolRunsLive(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("live sub-tool exit %d: %s", code, buf.String())
 	}
-	matches, _ := filepath.Glob(filepath.Join(out, "*", "*", "gosyslog.jsonl"))
-	if len(matches) == 0 {
-		t.Fatalf("no records under <out>/<live>/: %s", buf.String())
+	// flat: a single-subtool live run writes <out>/<asset-id>.jsonl (the live host name)
+	matches, _ := filepath.Glob(filepath.Join(out, "*.jsonl"))
+	if len(matches) != 1 {
+		t.Fatalf("want one flat record file under <out>/, got %v: %s", matches, buf.String())
 	}
 	if entries, _ := os.ReadDir(work); len(entries) != 0 {
 		t.Fatalf("scratch left behind: %v", entries)

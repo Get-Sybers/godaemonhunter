@@ -29,9 +29,9 @@
 // image directly under it is taken — and the parsers run ON the image: the
 // baked-in gomount pulls the linux-core and macos-core artefact surfaces
 // (docs/linux §5.4; whichever the OS volume holds) into the work dir, the layered run goes over that
-// as over a staged root tree, the knowledge store lands at
-// <OUT_DIR>/knowledge/<image>/ and the records under
-// <OUT_DIR>/<subtool>/<image>/, the scratch goes. Nothing is exported.
+// as over a staged root tree, the knowledge store lands per-item at
+// <OUT_DIR>/knowledge/<image>/ and the Layer-2 records flat at
+// <OUT_DIR>/<subtool>/<asset-id>.jsonl, the scratch goes. Nothing is exported.
 // A UAC collection (the tar.gz, tar or zip UAC — github.com/tclahr/uac —
 // writes) is the same item: gomount reads its [root]/ tree as
 // the root volume, so IMAGE may name one and every archive under the
@@ -196,7 +196,7 @@ func run(args []string, getenv func(string) string, stdout io.Writer) int {
 			if img := getenv(batch.Prefix(s.tool.Name) + "_IMAGE"); img != "" {
 				return runSubOnImage(s, img, getenv, stdout)
 			}
-			return batch.Run(s.tool, batch.Options{Version: version, Contract: contractYML}, getenv, stdout)
+			return runSubBatch(s, getenv, stdout)
 		}
 		// argv debug pass-through: hand the rest of the command line to
 		// the parser's own Main, busybox-style. It exits the process.
@@ -256,8 +256,8 @@ type huntSummary struct {
 }
 
 // runSubOnImage is one parser's batch mode over ONE disk image: linux-core is
-// pulled into scratch, the batch loop runs over that tree into
-// <OUT_DIR>/<image>/, and the parser's ordinary summary line is printed.
+// pulled into scratch, the batch loop runs over that tree, and the flattened
+// records land at <OUT_DIR>/<asset-id>.jsonl; the parser's summary line is printed.
 func runSubOnImage(s sub, selected string, getenv func(string) string, stdout io.Writer) int {
 	pfx := batch.Prefix(s.tool.Name) + "_"
 	get := func(suffix, def string) string {
@@ -276,16 +276,15 @@ func runSubOnImage(s sub, selected string, getenv func(string) string, stdout io
 		return configErrorSummary(s.name, err, stdout)
 	}
 	defer os.RemoveAll(scratch)
-	shim := shimEnv(s.tool, getenv, map[string]string{
-		"INPUT_DIR": scratch, "OUT_DIR": filepath.Join(out, diskimage.ImageItemName(in, images[0])), "IMAGE": "",
-	})
-	return batch.Run(s.tool, batch.Options{Version: version, Contract: contractYML}, shim, stdout)
+	return runFlat(s.tool, batch.Options{Version: version, Contract: contractYML}, getenv,
+		map[string]string{"INPUT_DIR": scratch, "IMAGE": ""},
+		out, work, scratch, diskimage.ImageItemName(in, images[0]), map[string]bool{}, stdout)
 }
 
 // runSubOnLive is one parser's batch mode on the live host: livecollect stages
-// the artefact surface into scratch, the batch loop runs over that into
-// <OUT_DIR>/<item>/, and the parser's ordinary summary line is printed. LIVE
-// and IMAGE are mutually exclusive.
+// the artefact surface into scratch, the batch loop runs over that, and the
+// flattened records land at <OUT_DIR>/<asset-id>.jsonl (the live host name);
+// the parser's summary line is printed. LIVE and IMAGE are mutually exclusive.
 func runSubOnLive(s sub, getenv func(string) string, stdout io.Writer) int {
 	pfx := batch.Prefix(s.tool.Name) + "_"
 	get := func(suffix, def string) string {
@@ -303,10 +302,29 @@ func runSubOnLive(s sub, getenv func(string) string, stdout io.Writer) int {
 		return configErrorSummary(s.name, err, stdout)
 	}
 	defer os.RemoveAll(res.Dir)
-	shim := shimEnv(s.tool, getenv, map[string]string{
-		"INPUT_DIR": res.Dir, "OUT_DIR": filepath.Join(out, item), "IMAGE": "", "LIVE": "",
-	})
-	return batch.Run(s.tool, batch.Options{Version: version, Contract: contractYML}, shim, stdout)
+	return runFlat(s.tool, batch.Options{Version: version, Contract: contractYML}, getenv,
+		map[string]string{"INPUT_DIR": res.Dir, "IMAGE": "", "LIVE": ""},
+		out, work, res.Dir, item, map[string]bool{}, stdout)
+}
+
+// runSubBatch is one parser's plain env-driven batch mode — no image, no live:
+// the loose-evidence case DX drives for a single sub-tool (e.g. a Layer-2 parser
+// over one host's extracted artefacts). It runs through the flatten wrapper so
+// the records land at <OUT_DIR>/<asset-id>.jsonl — one file, named by the
+// manifest asset id or (loose, as here) the input host dir — instead of the
+// runtime's <item>/<subtool>.jsonl tree. Any KNOWLEDGE_DIR the caller set falls
+// through untouched (a loose Layer-2 run resolves against a prior Layer-1 store).
+func runSubBatch(s sub, getenv func(string) string, stdout io.Writer) int {
+	pfx := batch.Prefix(s.tool.Name) + "_"
+	get := func(suffix, def string) string {
+		if v := getenv(pfx + suffix); v != "" {
+			return v
+		}
+		return def
+	}
+	out, in, work := get("OUT_DIR", "/output"), get("INPUT_DIR", "/input"), get("WORK_DIR", "/work")
+	return runFlat(s.tool, batch.Options{Version: version, Contract: contractYML}, getenv,
+		map[string]string{}, out, work, "", filepath.Base(in), map[string]bool{}, stdout)
 }
 
 // stageLive collects the live host's artefact surface into scratch and returns
@@ -427,7 +445,7 @@ func runHunt(getenv func(string) string, stdout io.Writer, words []string) int {
 
 	// the passes: the one source this run is on. A live host (livecollect)
 	// or one or more disk images (gomount) each become their own host —
-	// knowledge at <kdir>/<host>/, records under <OUT_DIR>/<subtool>/<host>/ —
+	// knowledge per-item at <kdir>/<host>/, Layer-2 records flat at <OUT_DIR>/<subtool>/<asset-id>.jsonl —
 	// and a loose tree (neither live nor image) is the input dir itself. LIVE
 	// and IMAGE are mutually exclusive: a run is on one source.
 	type pass struct{ in, host, scratch string }
@@ -490,22 +508,33 @@ func runHunt(getenv func(string) string, stdout io.Writer, words []string) int {
 		}
 	}
 
+	opened := map[string]bool{} // Layer-2 final files opened this hunt: first touch truncates, a later same-asset pass appends
 	for _, p := range passes {
 		hostKdir := filepath.Join(kdir, p.host)
+		assetFallback := p.host
+		if assetFallback == "" {
+			assetFallback = filepath.Base(p.in)
+		}
 		for _, s := range subs {
 			if s.layer == 2 && !want[s.name] {
 				continue
 			}
-			outDir := hostKdir
-			if s.layer == 2 {
-				outDir = filepath.Join(out, s.name, p.host)
-			}
-			shim := shimEnv(s.tool, getenv, map[string]string{
-				"INPUT_DIR": p.in, "OUT_DIR": outDir, "WORK_DIR": work,
-				"FORCE": force, "LOG_LEVEL": level, "KNOWLEDGE_DIR": hostKdir, "IMAGE": "",
-			})
 			var buf bytes.Buffer
-			code := batch.Run(s.tool, batch.Options{Version: version, Contract: contractYML}, shim, &buf)
+			var code int
+			if s.layer == 2 {
+				// Layer-2 records flatten to <OUT_DIR>/<subtool>/<asset-id>.jsonl
+				code = runFlat(s.tool, batch.Options{Version: version, Contract: contractYML}, getenv,
+					map[string]string{"INPUT_DIR": p.in, "WORK_DIR": work, "FORCE": force, "LOG_LEVEL": level, "KNOWLEDGE_DIR": hostKdir, "IMAGE": ""},
+					filepath.Join(out, s.name), work, p.scratch, assetFallback, opened, &buf)
+			} else {
+				// Layer-1 builds the per-item knowledge store (<kdir>/<host>) that
+				// Layer 2 resolves against — an internal tree, left un-flattened.
+				shim := shimEnv(s.tool, getenv, map[string]string{
+					"INPUT_DIR": p.in, "OUT_DIR": hostKdir, "WORK_DIR": work,
+					"FORCE": force, "LOG_LEVEL": level, "KNOWLEDGE_DIR": hostKdir, "IMAGE": "",
+				})
+				code = batch.Run(s.tool, batch.Options{Version: version, Contract: contractYML}, shim, &buf)
+			}
 			var ss batch.Summary
 			if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &ss); err != nil {
 				ss = batch.Summary{Tool: s.name, Status: "config_error", Exit: code}

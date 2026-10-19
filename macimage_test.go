@@ -68,7 +68,8 @@ func TestHuntPullsMacSystemVolume(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, buf.String())
 	}
-	// records land per item under <OUT_DIR>/<tool or knowledge>/<image>/<item>/
+	// Layer-2 records are flat (<OUT_DIR>/<subtool>/<asset-id>.jsonl); the Layer-1
+	// knowledge store keeps its per-item layout (<OUT_DIR>/knowledge/<image>/<item>/).
 	read := func(glob string) []map[string]any {
 		files, _ := filepath.Glob(filepath.Join(out, glob))
 		if len(files) == 0 {
@@ -125,7 +126,8 @@ func TestHuntPullsMacSystemVolume(t *testing.T) {
 		t.Fatalf("expected one --hash pull, on the primary pass only:\n%s", got)
 	}
 	// Apple's daemon in the system domain, the Data-side files' provenance intact
-	jobs := read("golaunchd/mac.E01/*/golaunchd.jsonl")
+	// flat Layer-2: one <asset-id>.jsonl (the image has a sha256 but no serial)
+	jobs := read("golaunchd/*.jsonl")
 	if len(jobs) != 1 || jobs[0]["Label"] != "com.apple.example" || jobs[0]["Domain"] != "system" || jobs[0]["Kind"] != "daemon" {
 		t.Fatalf("launchd: %v", jobs)
 	}
