@@ -8,6 +8,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -234,6 +235,96 @@ func TestHuntLayeredAndEnriched(t *testing.T) {
 	syslog := readOne(t, filepath.Join(out, "gosyslog"), "gosyslog.jsonl")
 	if syslog["EventTime"] != "2026-01-10T21:14:02.000000Z" {
 		t.Fatalf("zone not applied: %v", syslog["EventTime"])
+	}
+}
+
+// TestHuntStampsAssetIdentityOrigin proves the evidence-asset identity the
+// gopinfo↔gomount Origin contract adds (gopinfo v0.3.0): a materialise.jsonl
+// carrying the image-scoped image_sha256/disk_serial/disk_id and the
+// volume-scoped volume_guid/part_guid/part_offset is joined onto every record
+// as Origin, beside the existing Image/Volume/FSUUID/Label/Path/Inode, with the
+// host's own machine id riding Host.MachineID. No parser knows the fields — the
+// batch runtime stamps them at one shared site, so the whole matrix inherits
+// them from the dependency bump alone.
+func TestHuntStampsAssetIdentityOrigin(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	mk := func(rel, content string) {
+		p := filepath.Join(in, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("etc/machine-id", "a1b2c3d4e5f60718293a4b5c6d7e8f90\n")
+	mk("etc/hostname", "web01\n")
+	mk("etc/os-release", "PRETTY_NAME=\"Debian GNU/Linux 13 (trixie)\"\nID=debian\n")
+	mk("var/log/auth.log", "Jan 10 02:14:07 web01 sshd[2211]: Accepted password for alice from 10.0.0.9 port 51002 ssh2\n")
+
+	const (
+		img      = "host01.E01"
+		diskSer  = "TEST-EWF-SN-0001"
+		diskID   = "ecf3c5a8-50b0-4d2d-8a6a-ed0c0ea429e9"
+		imgSHA   = "40f5de615e7a99dc984b7ca2c94503849d92bd185c613f32c0615b35fab3e32a"
+		vol      = "p2"
+		fsuuid   = "21111111-2222-3333-4444-555555555555"
+		label    = "rootfs"
+		partGUID = "a0c564ae-2534-433a-97d8-a65d636e205c"
+		partOff  = 1048576
+	)
+	// Written as gomount v0.4.0 writes it: the image-scoped keys on the
+	// path-less metadata row, the volume-scoped keys on every per-file row.
+	volRow := func(path string, inode int) string {
+		return fmt.Sprintf(`{"image":%q,"volume":%q,"fsuuid":%q,"label":%q,"volume_guid":%q,"part_guid":%q,"part_offset":%d,"path":%q,"inode":%d}`,
+			img, vol, fsuuid, label, fsuuid, partGUID, partOff, path, inode)
+	}
+	mk("materialise.jsonl", strings.Join([]string{
+		fmt.Sprintf(`{"path":"","image":%q,"disk_serial":%q,"disk_id":%q,"image_sha256":%q}`, img, diskSer, diskID, imgSHA),
+		volRow("/etc/machine-id", 11),
+		volRow("/etc/hostname", 13),
+		volRow("/etc/os-release", 12),
+		volRow("/var/log/auth.log", 21),
+	}, "\n")+"\n")
+
+	var buf bytes.Buffer
+	code := run([]string{"hunt"}, env(map[string]string{
+		"GODAEMONHUNTER_INPUT_DIR": in, "GODAEMONHUNTER_OUT_DIR": out,
+		"GODAEMONHUNTER_WORK_DIR": t.TempDir(),
+	}), &buf)
+	if code != 0 {
+		t.Fatalf("hunt exit %d: %s", code, buf.String())
+	}
+
+	// a Layer-2 record (gosyslog, off auth.log) carries the joined Origin.
+	row := readOne(t, filepath.Join(out, "gosyslog"), "gosyslog.jsonl")
+	origin, ok := row["Origin"].(map[string]any)
+	if !ok {
+		t.Fatalf("no Origin on the gosyslog record: %v", row)
+	}
+	wantStr := map[string]string{
+		// the pre-existing provenance, untouched by the bump
+		"Image": img, "Volume": vol, "FSUUID": fsuuid, "Label": label,
+		"Path": "/var/log/auth.log",
+		// the evidence-asset identity the contract adds
+		"ImageSHA256": imgSHA, "DiskSerial": diskSer, "DiskID": diskID,
+		"VolumeGUID": fsuuid, "PartGUID": partGUID,
+	}
+	for k, want := range wantStr {
+		if got, _ := origin[k].(string); got != want {
+			t.Errorf("Origin.%s = %q, want %q", k, got, want)
+		}
+	}
+	if origin["Inode"] != float64(21) {
+		t.Errorf("Origin.Inode = %v, want 21", origin["Inode"])
+	}
+	if origin["PartOffset"] != float64(partOff) {
+		t.Errorf("Origin.PartOffset = %v, want %d", origin["PartOffset"], partOff)
+	}
+	// host.id is the host's own machine id, enriched from the Layer-1 store.
+	host, _ := row["Host"].(map[string]any)
+	if host["MachineID"] != "a1b2c3d4e5f60718293a4b5c6d7e8f90" {
+		t.Errorf("Host.MachineID = %v, want the staged machine id", host["MachineID"])
 	}
 }
 

@@ -34,12 +34,12 @@ if [ "$vol" = "7" ]; then
   mkdir -p "$out/System/Library/CoreServices" "$out/System/Library/LaunchDaemons"
   printf '<plist version="1.0"><dict><key>ProductName</key><string>macOS</string><key>ProductVersion</key><string>12.7.3</string><key>ProductBuildVersion</key><string>21H1015</string></dict></plist>' > "$out/System/Library/CoreServices/SystemVersion.plist"
   printf '<plist version="1.0"><dict><key>Label</key><string>com.apple.example</string><key>Program</key><string>/usr/libexec/example</string></dict></plist>' > "$out/System/Library/LaunchDaemons/com.apple.example.plist"
-  printf '{"image":"mac.E01","volume":"p2/apfs5","path":"/System/Library/CoreServices/SystemVersion.plist","inode":11}\n{"image":"mac.E01","volume":"p2/apfs5","path":"/System/Library/LaunchDaemons/com.apple.example.plist","inode":12}\n' > "$out/materialise.jsonl"
+  printf '{"path":"","image":"mac.E01","disk_id":"ecf3c5a8-50b0-4d2d-8a6a-ed0c0ea429e9"}\n{"image":"mac.E01","volume":"p2/apfs5","volume_guid":"a7d3a58b-c580-49cf-92c2-54059e9792ed","part_guid":"a0c564ae-2534-433a-97d8-a65d636e205c","part_offset":20480,"path":"/System/Library/CoreServices/SystemVersion.plist","inode":11}\n{"image":"mac.E01","volume":"p2/apfs5","volume_guid":"a7d3a58b-c580-49cf-92c2-54059e9792ed","part_guid":"a0c564ae-2534-433a-97d8-a65d636e205c","part_offset":20480,"path":"/System/Library/LaunchDaemons/com.apple.example.plist","inode":12}\n' > "$out/materialise.jsonl"
 else
   mkdir -p "$out/private/var/db/dslocal/nodes/Default/users" "$out/Library/Preferences/SystemConfiguration"
   printf '<plist version="1.0"><dict><key>name</key><array><string>gl</string></array><key>uid</key><array><string>501</string></array><key>gid</key><array><string>20</string></array></dict></plist>' > "$out/private/var/db/dslocal/nodes/Default/users/gl.plist"
   printf '<plist version="1.0"><dict><key>System</key><dict><key>System</key><dict><key>HostName</key><string>mba.local</string></dict></dict></dict></plist>' > "$out/Library/Preferences/SystemConfiguration/preferences.plist"
-  printf '{"image":"mac.E01","volume":"p2/apfs1","path":"/Library/Preferences/SystemConfiguration/preferences.plist","inode":21}\n{"image":"mac.E01","volume":"p2/apfs1","path":"/private/var/db/dslocal/nodes/Default/users/gl.plist","inode":22}\n' > "$out/materialise.jsonl"
+  printf '{"path":"","image":"mac.E01","disk_id":"ecf3c5a8-50b0-4d2d-8a6a-ed0c0ea429e9"}\n{"image":"mac.E01","volume":"p2/apfs1","volume_guid":"b1a2c3d4-e5f6-4788-99aa-bbccddeeff00","part_guid":"a0c564ae-2534-433a-97d8-a65d636e205c","part_offset":20480,"path":"/Library/Preferences/SystemConfiguration/preferences.plist","inode":21}\n{"image":"mac.E01","volume":"p2/apfs1","volume_guid":"b1a2c3d4-e5f6-4788-99aa-bbccddeeff00","part_guid":"a0c564ae-2534-433a-97d8-a65d636e205c","part_offset":20480,"path":"/private/var/db/dslocal/nodes/Default/users/gl.plist","inode":22}\n' > "$out/materialise.jsonl"
 fi
 echo '{"tool":"gomount","subtool":"materialise","status":"ok","exit":0}'
 `
@@ -98,6 +98,13 @@ func TestHuntPullsMacSystemVolume(t *testing.T) {
 	}
 	if origin, _ := osRow["Origin"].(map[string]any); origin["Volume"] != "p2/apfs5" || origin["Image"] != "mac.E01" {
 		t.Fatalf("os_release origin: %v", osRow["Origin"])
+	}
+	// the evidence-asset identity rides the same manifest join: the GPT disk
+	// GUID (image-level) and the APFS System volume's own GUID + partition GUID.
+	if origin, _ := osRow["Origin"].(map[string]any); origin["DiskID"] != "ecf3c5a8-50b0-4d2d-8a6a-ed0c0ea429e9" ||
+		origin["VolumeGUID"] != "a7d3a58b-c580-49cf-92c2-54059e9792ed" ||
+		origin["PartGUID"] != "a0c564ae-2534-433a-97d8-a65d636e205c" {
+		t.Fatalf("os_release asset identity: %v", osRow["Origin"])
 	}
 	// Apple's daemon in the system domain, the Data-side files' provenance intact
 	jobs := read("golaunchd/mac.E01/*/golaunchd.jsonl")
