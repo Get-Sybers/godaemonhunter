@@ -6,6 +6,32 @@ All notable changes are documented here, following
 
 ## [Unreleased]
 
+### Changed
+- **Evidence-asset identity on every record.** Bumped the shared
+  [`gopinfo`](https://github.com/Get-Sybers/gopinfo) runtime to **v0.3.0**,
+  which widens the record `Origin` with the frozen gopinfo↔gomount
+  asset-identity contract (all `omitempty`): the image-scoped `DiskSerial`
+  (drive/container serial — an EWF header `sn`, a VM container id) and
+  `DiskID` (GPT disk GUID or MBR signature), and the volume-scoped
+  `VolumeGUID`, `PartGUID` and `PartOffset`, joined from the
+  `materialise.jsonl` manifest that [gomount](https://github.com/Get-Sybers/gomount)
+  **v0.4.0** now writes (image-level keys on the path-less metadata row, the
+  volume-scoped keys on every file row). The host's own machine id already
+  rode `Host.MachineID`. The join is one shared site in gopinfo's batch
+  runtime, so all sixteen daemon parsers inherit the fields with **no
+  per-parser change** — a disk image, a UAC collection or a staged tree all
+  come out keyed to a resolvable evidence asset, beside the unchanged
+  `Image`/`Volume`/`FSUUID`/`Label`/`Path`/`Inode`. Honest nulls stand: a
+  field absent for a format or layout is omitted, never synthesised
+  (raw/dd/QCOW2 carry no `DiskSerial`; an unpartitioned volume no `PartGUID`;
+  a UAC collection's synthetic `[root]` no disk or volume GUID; macOS has no
+  machine-id source). `Origin.ImageSHA256` (the acquisition bytes' sha256) is
+  part of the same contract and is stamped too: the hunt now pulls the image
+  with gomount's `materialise --hash`, so every record carries it. That is one
+  extra sequential read of the container per hunt, paid once on the primary
+  pull — the Mac System-volume second pass inherits the digest as the
+  manifest's metadata default rather than re-hashing the image a second time.
+
 ## [0.3.0] - 2026-10-14
 
 ### Added

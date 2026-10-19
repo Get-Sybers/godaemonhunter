@@ -107,7 +107,16 @@ read-only and shared by every sub-run: a staged `linux-core` materialise
 tree, a mounted root filesystem, or any directory laid out like one. A
 `materialise.jsonl` manifest at the input root, when present, is joined onto
 every record as `Origin`/`Snapshot`/`Residue` — rule-2 provenance comes from
-the stage, never from the parser.
+the stage, never from the parser. Beside the image, volume, `FSUUID`/`Label`,
+original path and inode, `Origin` carries the evidence-asset identity
+[gomount](../gomount) ≥ v0.4.0 records on the manifest: the drive/device
+serial (`DiskSerial`) and disk GUID or MBR signature (`DiskID`), and the
+volume's `VolumeGUID`, `PartGUID` and `PartOffset` — each `omitempty`, stamped
+only where the image format and partitioning provide them (so a resolver
+downstream can key each row to one evidence asset). The host's own machine id
+rides `Host.MachineID`, and `ImageSHA256` carries the acquisition bytes'
+sha256 — the hunt pulls the image with gomount's `materialise --hash`, one
+extra sequential read of the container, paid once on the primary pull.
 
 Two more kinds of host sit *beside* the loose tree and are hunted **on**
 (see below): the disk images directly under the input root

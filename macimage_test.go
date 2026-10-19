@@ -24,22 +24,26 @@ if [ "$1" = "identify" ]; then
   echo '{"volumes":[{"volume":1,"source":"p1","fstype":"vfat"},{"volume":3,"source":"p2/apfs1","fstype":"apfs","os":"macos (data)"},{"volume":7,"source":"p2/apfs5","fstype":"apfs","os":"macos (system)"}]}'
   exit 0
 fi
-out=""; vol=""
+out=""; vol=""; hash=0
 while [ $# -gt 0 ]; do
-  case "$1" in --out) out="$2"; shift ;; --volume) vol="$2"; shift ;; esac
+  case "$1" in --out) out="$2"; shift ;; --volume) vol="$2"; shift ;; --hash) hash=1 ;; esac
   shift
 done
+echo "vol=${vol:-0} hash=$hash" >> "$(dirname "$0")/hash.log"
 [ -n "$out" ] || exit 2
 if [ "$vol" = "7" ]; then
   mkdir -p "$out/System/Library/CoreServices" "$out/System/Library/LaunchDaemons"
   printf '<plist version="1.0"><dict><key>ProductName</key><string>macOS</string><key>ProductVersion</key><string>12.7.3</string><key>ProductBuildVersion</key><string>21H1015</string></dict></plist>' > "$out/System/Library/CoreServices/SystemVersion.plist"
   printf '<plist version="1.0"><dict><key>Label</key><string>com.apple.example</string><key>Program</key><string>/usr/libexec/example</string></dict></plist>' > "$out/System/Library/LaunchDaemons/com.apple.example.plist"
-  printf '{"image":"mac.E01","volume":"p2/apfs5","path":"/System/Library/CoreServices/SystemVersion.plist","inode":11}\n{"image":"mac.E01","volume":"p2/apfs5","path":"/System/Library/LaunchDaemons/com.apple.example.plist","inode":12}\n' > "$out/materialise.jsonl"
+  printf '{"path":"","image":"mac.E01","disk_id":"ecf3c5a8-50b0-4d2d-8a6a-ed0c0ea429e9"}\n{"image":"mac.E01","volume":"p2/apfs5","volume_guid":"a7d3a58b-c580-49cf-92c2-54059e9792ed","part_guid":"a0c564ae-2534-433a-97d8-a65d636e205c","part_offset":20480,"path":"/System/Library/CoreServices/SystemVersion.plist","inode":11}\n{"image":"mac.E01","volume":"p2/apfs5","volume_guid":"a7d3a58b-c580-49cf-92c2-54059e9792ed","part_guid":"a0c564ae-2534-433a-97d8-a65d636e205c","part_offset":20480,"path":"/System/Library/LaunchDaemons/com.apple.example.plist","inode":12}\n' > "$out/materialise.jsonl"
 else
   mkdir -p "$out/private/var/db/dslocal/nodes/Default/users" "$out/Library/Preferences/SystemConfiguration"
   printf '<plist version="1.0"><dict><key>name</key><array><string>gl</string></array><key>uid</key><array><string>501</string></array><key>gid</key><array><string>20</string></array></dict></plist>' > "$out/private/var/db/dslocal/nodes/Default/users/gl.plist"
   printf '<plist version="1.0"><dict><key>System</key><dict><key>System</key><dict><key>HostName</key><string>mba.local</string></dict></dict></dict></plist>' > "$out/Library/Preferences/SystemConfiguration/preferences.plist"
-  printf '{"image":"mac.E01","volume":"p2/apfs1","path":"/Library/Preferences/SystemConfiguration/preferences.plist","inode":21}\n{"image":"mac.E01","volume":"p2/apfs1","path":"/private/var/db/dslocal/nodes/Default/users/gl.plist","inode":22}\n' > "$out/materialise.jsonl"
+  meta='{"path":"","image":"mac.E01","disk_id":"ecf3c5a8-50b0-4d2d-8a6a-ed0c0ea429e9"'
+  [ "$hash" = 1 ] && meta=$meta',"image_sha256":"5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e"'
+  meta=$meta'}'
+  printf '%s\n{"image":"mac.E01","volume":"p2/apfs1","volume_guid":"b1a2c3d4-e5f6-4788-99aa-bbccddeeff00","part_guid":"a0c564ae-2534-433a-97d8-a65d636e205c","part_offset":20480,"path":"/Library/Preferences/SystemConfiguration/preferences.plist","inode":21}\n{"image":"mac.E01","volume":"p2/apfs1","volume_guid":"b1a2c3d4-e5f6-4788-99aa-bbccddeeff00","part_guid":"a0c564ae-2534-433a-97d8-a65d636e205c","part_offset":20480,"path":"/private/var/db/dslocal/nodes/Default/users/gl.plist","inode":22}\n' "$meta" > "$out/materialise.jsonl"
 fi
 echo '{"tool":"gomount","subtool":"materialise","status":"ok","exit":0}'
 `
@@ -98,6 +102,27 @@ func TestHuntPullsMacSystemVolume(t *testing.T) {
 	}
 	if origin, _ := osRow["Origin"].(map[string]any); origin["Volume"] != "p2/apfs5" || origin["Image"] != "mac.E01" {
 		t.Fatalf("os_release origin: %v", osRow["Origin"])
+	}
+	// the evidence-asset identity rides the same manifest join: the GPT disk
+	// GUID (image-level) and the APFS System volume's own GUID + partition GUID.
+	if origin, _ := osRow["Origin"].(map[string]any); origin["DiskID"] != "ecf3c5a8-50b0-4d2d-8a6a-ed0c0ea429e9" ||
+		origin["VolumeGUID"] != "a7d3a58b-c580-49cf-92c2-54059e9792ed" ||
+		origin["PartGUID"] != "a0c564ae-2534-433a-97d8-a65d636e205c" {
+		t.Fatalf("os_release asset identity: %v", osRow["Origin"])
+	}
+	// ImageSHA256 is hashed once, on the primary (Data) pull; the System
+	// volume's rows inherit it as the manifest metadata default, so the System
+	// second pass never re-reads the whole image to hash it a second time.
+	if origin, _ := osRow["Origin"].(map[string]any); origin["ImageSHA256"] != "5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e" {
+		t.Fatalf("os_release ImageSHA256 (metadata default): %v", osRow["Origin"])
+	}
+	hashLog, err := os.ReadFile(filepath.Join(filepath.Dir(stub), "hash.log"))
+	if err != nil {
+		t.Fatalf("hash log: %v", err)
+	}
+	if got := string(hashLog); !strings.Contains(got, "vol=0 hash=1") ||
+		!strings.Contains(got, "vol=7 hash=0") || strings.Count(got, "hash=1") != 1 {
+		t.Fatalf("expected one --hash pull, on the primary pass only:\n%s", got)
 	}
 	// Apple's daemon in the system domain, the Data-side files' provenance intact
 	jobs := read("golaunchd/mac.E01/*/golaunchd.jsonl")
