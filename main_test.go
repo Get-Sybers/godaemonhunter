@@ -224,7 +224,7 @@ func TestHuntLayeredAndEnriched(t *testing.T) {
 	// Layer 2 came out enriched: the audit event resolved uid 1000 and
 	// carries the Host block; the syslog line got the host's zone
 	// (Berlin winter, 22:14 local == 21:14Z).
-	audit := readOne(t, filepath.Join(out, "goauditd"), "goauditd.jsonl")
+	audit := readFlat(t, filepath.Join(out, "goauditd"))
 	if audit["UIDName"] != "alice" || audit["UID"] != "1000" {
 		t.Fatalf("audit enrichment: %v", audit)
 	}
@@ -232,7 +232,7 @@ func TestHuntLayeredAndEnriched(t *testing.T) {
 	if host["Hostname"] != "web01" || host["Timezone"] != "Europe/Berlin" {
 		t.Fatalf("host block: %v", host)
 	}
-	syslog := readOne(t, filepath.Join(out, "gosyslog"), "gosyslog.jsonl")
+	syslog := readFlat(t, filepath.Join(out, "gosyslog"))
 	if syslog["EventTime"] != "2026-01-10T21:14:02.000000Z" {
 		t.Fatalf("zone not applied: %v", syslog["EventTime"])
 	}
@@ -297,7 +297,7 @@ func TestHuntStampsAssetIdentityOrigin(t *testing.T) {
 	}
 
 	// a Layer-2 record (gosyslog, off auth.log) carries the joined Origin.
-	row := readOne(t, filepath.Join(out, "gosyslog"), "gosyslog.jsonl")
+	row := readFlat(t, filepath.Join(out, "gosyslog"))
 	origin, ok := row["Origin"].(map[string]any)
 	if !ok {
 		t.Fatalf("no Origin on the gosyslog record: %v", row)
@@ -344,6 +344,27 @@ func readOne(t *testing.T, root, name string) map[string]any {
 	})
 	if err != nil || rec == nil {
 		t.Fatalf("no %s under %s: %v", name, root, err)
+	}
+	return rec
+}
+
+// readFlat reads the first row of the single flattened record file under dir
+// (<OUT_DIR>/<subtool>/<asset-id>.jsonl). It asserts exactly one .jsonl is there,
+// so a Layer-2 run that failed to flatten (or left per-item files) is caught.
+func readFlat(t *testing.T, dir string) map[string]any {
+	t.Helper()
+	matches, _ := filepath.Glob(filepath.Join(dir, "*.jsonl"))
+	if len(matches) != 1 {
+		t.Fatalf("want one flat .jsonl under %s, got %v", dir, matches)
+	}
+	b, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := strings.SplitN(strings.TrimSpace(string(b)), "\n", 2)[0]
+	var rec map[string]any
+	if err := json.Unmarshal([]byte(first), &rec); err != nil {
+		t.Fatalf("decode %s: %v", matches[0], err)
 	}
 	return rec
 }

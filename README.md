@@ -164,7 +164,7 @@ prefer `--output-format tar` where you can choose.
 | `GODAEMONHUNTER_OUT_DIR` | `/output` | output root: `knowledge/` (Layer 1) + one `<subtool>/` tree per daemon parser |
 | `GODAEMONHUNTER_KNOWLEDGE_DIR` | *(empty)* | override the knowledge store location; empty = `<OUT_DIR>/knowledge`, built by Layer 1 in the same run |
 | `GODAEMONHUNTER_WORK_DIR` | `/work` | scratch (writable tmpfs), shared by every sub-run; a disk image's linux-core surface is pulled here while its parsers run — bind a disk-backed directory for large images |
-| `GODAEMONHUNTER_IMAGE` | *(empty)* | run **on a disk image or a UAC collection**: its path relative to `INPUT_DIR` (E01/Ex01, raw, VMDK, VHDX, VHD, QCOW2, VDI, DMG (.dmg), sparseimage (.sparseimage); or the `.tar.gz`/`.tar`/`.zip` the Unix-like Artifacts Collector writes, whose `[root]/` tree is the root volume). The baked-in [gomount](../gomount) pulls the `linux-core` surface out of the root volume into `WORK_DIR`, the layered run goes over that as over a staged root tree, the knowledge store lands at `<KNOWLEDGE_DIR>/<image>/` and the records under `<OUT_DIR>/<subtool>/<image>/…`, the scratch goes — nothing is exported. Empty = the loose tree itself plus every image directly under it plus every archive there that `gomount identify` confirms as a collection. A sub-tool run reads `<SUBTOOL>_IMAGE` and writes `<OUT_DIR>/<image>/…` |
+| `GODAEMONHUNTER_IMAGE` | *(empty)* | run **on a disk image or a UAC collection**: its path relative to `INPUT_DIR` (E01/Ex01, raw, VMDK, VHDX, VHD, QCOW2, VDI, DMG (.dmg), sparseimage (.sparseimage); or the `.tar.gz`/`.tar`/`.zip` the Unix-like Artifacts Collector writes, whose `[root]/` tree is the root volume). The baked-in [gomount](../gomount) pulls the `linux-core` surface out of the root volume into `WORK_DIR`, the layered run goes over that as over a staged root tree, the knowledge store lands per-item at `<KNOWLEDGE_DIR>/<image>/` and the Layer-2 records flat at `<OUT_DIR>/<subtool>/<asset-id>.jsonl`, the scratch goes — nothing is exported. Empty = the loose tree itself plus every image directly under it plus every archive there that `gomount identify` confirms as a collection. A sub-tool run reads `<SUBTOOL>_IMAGE` and writes `<OUT_DIR>/<asset-id>.jsonl` |
 | `GODAEMONHUNTER_LIVE` | `0` | run **on the live host** (see [Running on a live system](#running-on-a-live-system)): `1/true/yes/on` stages the known artefact surface of the live root and runs the layered pipeline over it. Mutually exclusive with `GODAEMONHUNTER_IMAGE`; `INPUT_DIR` is unused |
 | `GODAEMONHUNTER_LIVE_ROOT` | `/` | the live root `LIVE` collects from — a read-only bind-mount of the host filesystem (a live-response container) or a staged root tree |
 | `GODAEMONHUNTER_LIVE_OS` | *(this host's OS)* | the live-collection profile: `linux` or `darwin` ([`livecollect/profiles.json`](livecollect/profiles.json)) |
@@ -186,9 +186,9 @@ Set `GODAEMONHUNTER_LIVE=1` (mutually exclusive with
 out of the live root into the work dir — **only** the known trees, never
 `/proc`, `/sys` or other mounts, and a per-file read failure is logged and
 skipped rather than fatal — then the same layered run goes over that
-snapshot. The knowledge store lands at `<KNOWLEDGE_DIR>/<host>/` and the
-records under `<OUT_DIR>/<subtool>/<host>/`, the host folder named for the
-live host; the scratch goes, nothing is exported. Each record's
+snapshot. The knowledge store lands per-item at `<KNOWLEDGE_DIR>/<host>/` and
+the Layer-2 records flat at `<OUT_DIR>/<subtool>/<asset-id>.jsonl`, the asset id
+being the live host name; the scratch goes, nothing is exported. Each record's
 `Origin.Path` is its real on-host path and it carries no `Snapshot` — the
 live volume.
 
@@ -226,15 +226,26 @@ or adding an OS is a data change.
 
 ## Output
 
-The layered run (bare or stream-scoped) writes one structured tree under
+The layered run (bare or stream-scoped) writes two trees under
 `GODAEMONHUNTER_OUT_DIR`:
 
 ```
-<OUT_DIR>/knowledge/<item>/{gohost,gousers,gonetwork,gomachost,gomacusers}.jsonl   Layer 1 = the store
-<OUT_DIR>/<subtool>/<item>/<subtool>.jsonl                    per selected daemon parser, enriched
+<OUT_DIR>/knowledge/<item>/{gohost,gousers,gonetwork,gomachost,gomacusers}.jsonl   Layer 1 = the store (per-item)
+<OUT_DIR>/<subtool>/<asset-id>.jsonl                          Layer 2 = records, one flat file per (parser, asset)
 ```
 
-and prints **one** aggregate JSON summary line with the stream words it
+The **Layer-2** records are flat: one file per (daemon parser, evidence asset),
+named by the strongest identifier the gomount manifest carries for the image —
+`disk_serial` → `volume_guid` → `image_sha256` — falling back to the item name
+(a loose tree or live host: the host directory name). The per-artefact source
+path is each row's `Origin.Path`, so collapsing the old `<image>/<item>/`
+nesting loses no provenance; two acquisitions of one disk share an `<asset-id>`
+and merge by appending. A non-JSONL format (`<SUBTOOL>_FORMAT=csv`) is **not**
+flattened — those per-item/per-table files keep their nested layout. The
+**Layer-1** knowledge store is an internal enrichment tree consumed by Layer 2
+and keeps its per-item layout unchanged.
+
+The run prints **one** aggregate JSON summary line with the stream words it
 ran under `streams` and every sub-tool's own summary embedded under
 `subtools` (plus `knowledge_dir`, the roll-up counters, `status`,
 `exit`). A single-parser sub-run prints that parser's ordinary summary
