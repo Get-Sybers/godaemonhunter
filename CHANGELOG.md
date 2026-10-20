@@ -8,8 +8,8 @@ All notable changes are documented here, following
 
 ### Changed
 - **Flat Layer-2 lane output — one record file per (sub-tool, evidence asset).**
-  The hunt sweep (disk images and UAC collections), the single-sub-tool
-  image/live runs and the plain batch run now write
+  Every Layer-2 record run — the hunt sweep (disk images and UAC collections),
+  the single-sub-tool image/live runs and the plain batch run — now writes
   `<OUT_DIR>/<subtool>/<asset-id>.jsonl` instead of the runtime's
   `<subtool>/<image>/<item>/<subtool>.jsonl` tree: no per-artefact directory and
   no duplicated `<subtool>.jsonl` leaf. The asset id is the strongest gomount
@@ -19,7 +19,9 @@ All notable changes are documented here, following
   Two acquisitions of one disk share an asset id and **merge by appending** within
   a run (byakugan dedupes rows at load); a re-run rebuilds. The **Layer-1
   knowledge store** (`<OUT_DIR>/knowledge/…`) is an internal enrichment tree and
-  keeps its per-item layout. A non-JSONL (`<SUBTOOL>_FORMAT=csv`) run is not
+  keeps its per-item layout in **every** mode — including a standalone Layer-1
+  sub-tool run, so the loose-host lane's gohost/gousers/gonetwork into one
+  OUT_DIR do not collide on a single flat file. A non-JSONL (`<SUBTOOL>_FORMAT=csv`) run is not
   flattened — those per-item/per-table files are preserved verbatim. gopinfo is
   unchanged: it writes its per-item tree into a private temp dir the engine then
   merges (`flatten.go`, `assetid.go`).

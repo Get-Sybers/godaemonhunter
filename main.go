@@ -256,8 +256,9 @@ type huntSummary struct {
 }
 
 // runSubOnImage is one parser's batch mode over ONE disk image: linux-core is
-// pulled into scratch, the batch loop runs over that tree, and the flattened
-// records land at <OUT_DIR>/<asset-id>.jsonl; the parser's summary line is printed.
+// pulled into scratch, the batch loop runs over that tree; a Layer-2 parser's
+// records land flattened at <OUT_DIR>/<asset-id>.jsonl, a Layer-1 (knowledge)
+// parser keeps its per-item layout; the parser's summary line is printed.
 func runSubOnImage(s sub, selected string, getenv func(string) string, stdout io.Writer) int {
 	pfx := batch.Prefix(s.tool.Name) + "_"
 	get := func(suffix, def string) string {
@@ -276,15 +277,23 @@ func runSubOnImage(s sub, selected string, getenv func(string) string, stdout io
 		return configErrorSummary(s.name, err, stdout)
 	}
 	defer os.RemoveAll(scratch)
+	if s.layer != 2 {
+		// Layer 1 builds the knowledge store — per-item, never flattened
+		shim := shimEnv(s.tool, getenv, map[string]string{
+			"INPUT_DIR": scratch, "OUT_DIR": filepath.Join(out, diskimage.ImageItemName(in, images[0])), "IMAGE": "",
+		})
+		return batch.Run(s.tool, batch.Options{Version: version, Contract: contractYML}, shim, stdout)
+	}
 	return runFlat(s.tool, batch.Options{Version: version, Contract: contractYML}, getenv,
 		map[string]string{"INPUT_DIR": scratch, "IMAGE": ""},
 		out, work, scratch, diskimage.ImageItemName(in, images[0]), map[string]bool{}, stdout)
 }
 
 // runSubOnLive is one parser's batch mode on the live host: livecollect stages
-// the artefact surface into scratch, the batch loop runs over that, and the
-// flattened records land at <OUT_DIR>/<asset-id>.jsonl (the live host name);
-// the parser's summary line is printed. LIVE and IMAGE are mutually exclusive.
+// the artefact surface into scratch, the batch loop runs over that; a Layer-2
+// parser's records land flattened at <OUT_DIR>/<asset-id>.jsonl (the live host
+// name), a Layer-1 (knowledge) parser stays per-item; the summary line is
+// printed. LIVE and IMAGE are mutually exclusive.
 func runSubOnLive(s sub, getenv func(string) string, stdout io.Writer) int {
 	pfx := batch.Prefix(s.tool.Name) + "_"
 	get := func(suffix, def string) string {
@@ -302,18 +311,25 @@ func runSubOnLive(s sub, getenv func(string) string, stdout io.Writer) int {
 		return configErrorSummary(s.name, err, stdout)
 	}
 	defer os.RemoveAll(res.Dir)
+	if s.layer != 2 {
+		// Layer 1 builds the knowledge store — per-item, never flattened
+		shim := shimEnv(s.tool, getenv, map[string]string{
+			"INPUT_DIR": res.Dir, "OUT_DIR": filepath.Join(out, item), "IMAGE": "", "LIVE": "",
+		})
+		return batch.Run(s.tool, batch.Options{Version: version, Contract: contractYML}, shim, stdout)
+	}
 	return runFlat(s.tool, batch.Options{Version: version, Contract: contractYML}, getenv,
 		map[string]string{"INPUT_DIR": res.Dir, "IMAGE": "", "LIVE": ""},
 		out, work, res.Dir, item, map[string]bool{}, stdout)
 }
 
 // runSubBatch is one parser's plain env-driven batch mode — no image, no live:
-// the loose-evidence case DX drives for a single sub-tool (e.g. a Layer-2 parser
-// over one host's extracted artefacts). It runs through the flatten wrapper so
-// the records land at <OUT_DIR>/<asset-id>.jsonl — one file, named by the
-// manifest asset id or (loose, as here) the input host dir — instead of the
-// runtime's <item>/<subtool>.jsonl tree. Any KNOWLEDGE_DIR the caller set falls
-// through untouched (a loose Layer-2 run resolves against a prior Layer-1 store).
+// the loose-evidence case DX drives for a single sub-tool. A Layer-2 parser runs
+// through the flatten wrapper → <OUT_DIR>/<asset-id>.jsonl (named by the manifest
+// asset id, or loose as here the input host dir). A Layer-1 (knowledge) parser is
+// NOT flattened — it keeps the per-item <item>/<subtool>.jsonl layout, so the
+// lane's gohost/gousers/gonetwork runs into one OUT_DIR do not collide. Any
+// KNOWLEDGE_DIR the caller set falls through untouched.
 func runSubBatch(s sub, getenv func(string) string, stdout io.Writer) int {
 	pfx := batch.Prefix(s.tool.Name) + "_"
 	get := func(suffix, def string) string {
@@ -323,6 +339,13 @@ func runSubBatch(s sub, getenv func(string) string, stdout io.Writer) int {
 		return def
 	}
 	out, in, work := get("OUT_DIR", "/output"), get("INPUT_DIR", "/input"), get("WORK_DIR", "/work")
+	if s.layer != 2 {
+		// Layer 1 builds the knowledge store (<OUT_DIR>/<item>/<subtool>.jsonl) —
+		// per-item, never flattened. This is the loose-host path the lane drives
+		// gohost/gousers/gonetwork through into one OUT_DIR; flattening would
+		// collide them on a single file, so Layer 1 keeps the sweep's layout.
+		return batch.Run(s.tool, batch.Options{Version: version, Contract: contractYML}, getenv, stdout)
+	}
 	return runFlat(s.tool, batch.Options{Version: version, Contract: contractYML}, getenv,
 		map[string]string{}, out, work, "", filepath.Base(in), map[string]bool{}, stdout)
 }
