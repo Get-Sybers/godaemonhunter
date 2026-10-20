@@ -60,6 +60,52 @@ func TestSubtoolDispatch(t *testing.T) {
 	}
 }
 
+// TestSubtoolLayer1NotFlattened: a standalone Layer-1 run is the loose-host
+// knowledge-store path the godfir_godaemonhunter lane drives (gohost/gousers/
+// gonetwork into one OUT_DIR). Layer 1 must stay per-item — NOT flattened to a
+// single <OUT_DIR>/<asset-id>.jsonl — or the subtools collide on one file and
+// overwrite each other. (Layer 2 still flattens; see the subtool-on-image test.)
+func TestSubtoolLayer1NotFlattened(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	writeFixtures(t, in)
+
+	for _, sub := range []string{"gohost", "gousers"} {
+		pfx := strings.ToUpper(sub)
+		var buf bytes.Buffer
+		if code := run([]string{sub}, env(map[string]string{
+			pfx + "_INPUT_DIR": in, pfx + "_OUT_DIR": out, pfx + "_WORK_DIR": t.TempDir(),
+		}), &buf); code != 0 {
+			t.Fatalf("%s exit %d: %s", sub, code, buf.String())
+		}
+	}
+
+	foundHost, foundUsers := false, false
+	var flatTop []string
+	_ = filepath.WalkDir(out, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		switch d.Name() {
+		case "gohost.jsonl":
+			foundHost = true
+		case "gousers.jsonl":
+			foundUsers = true
+		}
+		// a .jsonl directly under out (no dir between) would be the flattened leaf
+		if rel, _ := filepath.Rel(out, p); !strings.Contains(rel, string(os.PathSeparator)) &&
+			strings.HasSuffix(rel, ".jsonl") {
+			flatTop = append(flatTop, rel)
+		}
+		return nil
+	})
+	if !foundHost || !foundUsers {
+		t.Fatalf("Layer-1 per-item records missing: gohost=%v gousers=%v", foundHost, foundUsers)
+	}
+	if len(flatTop) != 0 {
+		t.Fatalf("Layer-1 run was flattened to a top-level file (collision risk): %v", flatTop)
+	}
+}
+
 // TestEverySubtoolEmptyTree is the batch contract over the whole registry
 // (the per-parser binaries are gone; this is their binary-level test now):
 // an empty evidence tree is exit 1, status "nothing", the tool's own name.
